@@ -81,12 +81,15 @@
     <div class="modalBody">
       <div style="margin-bottom:20px">
         <label style="display:block;margin-bottom:6px;font-weight:700">PROS Directory (optional, needed for live viewing)</label>
+        <div style="font-size:12px;margin-bottom:8px;color:var(--muted)">Manual: enter a path. Auto: scan common folders for PROS projects.</div>
         <div style="display:flex;gap:8px;align-items:center">
           <input id="prosDirInput" type="text" placeholder="/path/to/pros/project" style="flex:1" />
-          <button id="btnProsDirBrowse" class="iconBtn" style="font-size:12px">Browse</button>
+          <button id="btnProsDirAuto" class="iconBtn" style="font-size:12px">Auto-detect</button>
         </div>
-          <div id="prosDirStatus" class="muted" style="margin-top:4px;font-size:11px">Set the PROS project directory for live viewing functionality</div>
-        </div>
+        <div id="prosDirAutoStatus" class="muted" style="margin-top:6px;font-size:11px">No scan yet</div>
+        <div id="prosDirAutoResults" style="margin-top:8px;font-size:12px"></div>
+        <div id="prosDirStatus" class="muted" style="margin-top:6px;font-size:11px">Set the PROS project directory for live viewing functionality</div>
+      </div>
 
       <div class="divider" style="margin:20px 0;"></div>
 

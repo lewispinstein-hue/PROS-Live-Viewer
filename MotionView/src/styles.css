@@ -292,7 +292,7 @@
   .modalBackdrop { 
     position:absolute; 
     inset:0; 
-    background:rgba(0,0,0,0.65); 
+    background:rgba(0,0,0,0.35); 
     backdrop-filter: blur(6px); 
     -webkit-backdrop-filter: blur(6px);
     z-index:1;
@@ -437,7 +437,7 @@
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-#btnCloseFloat.iconBtn:hover {
+#btnCloseFloat.iconBtn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.07);
   border-color: rgba(255, 255, 255, 0.16);
   color: var(--float-text);

@@ -77,7 +77,7 @@ const btnSettings = document.getElementById('btnSettings');
 const settingsModal = document.getElementById('settingsModal');
 const btnSettingsClose = document.getElementById('btnSettingsClose');
 const prosDirInput = document.getElementById('prosDirInput');
-const btnProsDirBrowse = document.getElementById('btnProsDirBrowse');
+const btnProsDirAuto = document.getElementById('btnProsDirAuto');
 const btnUploadRobotImage = document.getElementById('btnUploadRobotImage');
 const robotImageFile = document.getElementById('robotImageFile');
 const robotImageToggle = document.getElementById('robotImageToggle');
@@ -97,9 +97,12 @@ const settingsMinSpeed = document.getElementById('settingsMinSpeed');
 const settingsMaxSpeed = document.getElementById('settingsMaxSpeed');
 
 const prosDirStatusEl = document.getElementById('prosDirStatus');
+const prosDirAutoStatusEl = document.getElementById('prosDirAutoStatus');
+const prosDirAutoResultsEl = document.getElementById('prosDirAutoResults');
 let prosDirValid = false;
 let prosDirRetryTimer = null;
 let prosDirRetryAttempts = 0;
+let prosDirFromSettings = false;
 
 // --- FIELD IMAGES ---
 const FIELD_IMAGES = [
@@ -304,6 +307,19 @@ function computeSpeedNorm() {
   }
 }
 
+function normFromSpeedRaw(s) {
+  const { minV, maxV } = getMinMaxSpeed();
+  const denom = (maxV - minV) || 1;
+  const v = Math.abs(s ?? 0);
+  return clamp((v - minV) / denom, 0, 1);
+}
+
+function speedFromNorm(n) {
+  if (n == null || !isFinite(n)) return null;
+  // Display normalized speed on a 0-100 scale so min/max changes shift the value.
+  return clamp(n, 0, 1) * 100;
+}
+
 function heatColorFromNorm(n) {
   const t0 = clamp(n, 0, 1);
 
@@ -488,7 +504,12 @@ async function loadFieldImage(filename) {
   if (!filename) { fieldImg = null; draw(); return; }
   const img = new Image();
   img.onload = () => { fieldImg = img; draw(); };
-  img.onerror = () => { fieldImg = null; setStatus(`Could not load field image: ${filename}`); draw(); };
+  img.onerror = () => {
+    fieldImg = null; 
+    draw(); 
+    if (filename == "no") return; // No field image is 'no'
+    setStatus(`Could not load field image: ${filename}`); 
+  };
   img.src = filename;
 }
 
@@ -1398,10 +1419,14 @@ function updateFloatingInfo(pose, idx) {
   
   const l = pose.l_vel || 0;
   const r = pose.r_vel || 0;
+  const n = (pose.speed_norm != null) ? pose.speed_norm : 0;
+  const disp = speedFromNorm(n);
+  const lDisp = speedFromNorm(normFromSpeedRaw(l));
+  const rDisp = speedFromNorm(normFromSpeedRaw(r));
   
-  document.getElementById('favg').textContent = fmtNum((l + r) / 2, 2);
-  document.getElementById('flv').textContent = fmtNum(l, 2);
-  document.getElementById('frv').textContent = fmtNum(r, 2);
+  document.getElementById('favg').textContent = disp == null ? "—" : fmtNum(disp, 2);
+  document.getElementById('flv').textContent = lDisp == null ? "—" : fmtNum(lDisp, 2);
+  document.getElementById('frv').textContent = rDisp == null ? "—" : fmtNum(rDisp, 2);
   
   document.getElementById('fcount').textContent = `Point: ${idx + 1}/${rawPoses.length}`;
 
@@ -1500,11 +1525,11 @@ function updatePoseReadout() {
   timePill.textContent = (t == null) ? "Time: —" : `Time: ${(t / 1000).toFixed(2)}s`;
   pointPill.textContent = `Point: ${Math.max(1, idx+1)}/${total}`;
 
-  const spRaw = (p?.speed_raw != null) ? p.speed_raw : (rawPoses[idx]?.speed_raw ?? null);
-  const spNorm = (p?.speed_norm != null) ? p.speed_norm : (rawPoses[idx]?.speed_norm ?? 0);
+  const spNorm = (p?.speed_norm != null) ? p.speed_norm : (rawPoses[idx]?.speed_norm ?? null);
+  const spDisp = speedFromNorm(spNorm);
 
   posePill.textContent = p
-    ? `X: ${fmtNum(p.x,1)}  Y: ${fmtNum(p.y,1)}  θ: ${fmtNum(p.theta,1)}°  Speed: ${fmtNum(spRaw,2)}`
+    ? `X: ${fmtNum(p.x,1)}  Y: ${fmtNum(p.y,1)}  θ: ${fmtNum(p.theta,1)}°  Speed: ${spDisp == null ? "—" : fmtNum(spDisp,2)}`
     : "X: —  Y: —  θ: —  Speed: —";
   updateDeltaReadout();
   updateFloatingInfo(p, idx);  
@@ -1586,8 +1611,11 @@ canvas.addEventListener('wheel', (e) => {
   const newOffXBase = baseOffsetXpx * viewZoom;
   const newOffYBase = baseOffsetYpx * viewZoom;
 
-  viewPanXpx = mx - (w0.x * newScale + newOffXBase);
-  viewPanYpx = my - (newOffYBase - w0.y * newScale);
+  // account for field rotation when anchoring zoom to cursor
+  const xR = w0.x * fieldRotationCos - w0.y * fieldRotationSin;
+  const yR = w0.x * fieldRotationSin + w0.y * fieldRotationCos;
+  viewPanXpx = mx - (xR * newScale + newOffXBase);
+  viewPanYpx = my - (newOffYBase - yR * newScale);
 
   computeTransform();
   requestDrawAll();
@@ -1786,10 +1814,17 @@ function play() {
     // Make playback speed match the heat color scale (slow=red, fast=green),
     // including when the user adjusts Min/Max speed normalization.
     const cur = interpolatePoseAtTime(playTimeMs) || rawPoses[selectedIndex] || null;
-    const n = (cur && typeof cur.speed_norm === "number") ? cur.speed_norm : 0.5;
+    let n = null;
+    if (cur && typeof cur.speed_raw === "number") {
+      n = normFromSpeedRaw(cur.speed_raw);
+    } else if (cur && typeof cur.speed_norm === "number") {
+      n = cur.speed_norm;
+    }
+    if (n == null) n = 0.5;
     const SPEED_SLOW = 0.25; // red end
     const SPEED_FAST = 2.00; // green end
-    playTimeMs += dtWall * playRate;
+    const speedMul = SPEED_SLOW + (SPEED_FAST - SPEED_SLOW) * clamp(n, 0, 1);
+    playTimeMs += dtWall * playRate * speedMul;
 
     const tMin = rawPoses[0]?.t ?? 0;
     const tMax = rawPoses[rawPoses.length - 1]?.t ?? tMin;
@@ -2030,6 +2065,9 @@ const leftRefreshIntervalEl = document.getElementById('leftRefreshInterval');
 let leftWs = null;
 let leftConnected = false;
 let leftStreaming = false;
+let leftActionInFlight = false;
+let leftActionLastAt = 0;
+const LEFT_ACTION_COOLDOWN_MS = 400;
 
 // In livestream mode, optionally keep the robot snapped to the newest pose when not hovering the timeline.
 // Toggled with Space (while connected).
@@ -2042,6 +2080,8 @@ let leftRefreshMs = parseInt(leftRefreshIntervalEl?.value || "500", 10) || 500;
 // Buffer incoming WS lines; doLeftRefresh consumes them and updates poses/watches.
 let livePendingLines = [];
 let livePendingConsumed = 0; // index into livePendingLines
+let liveAppendQueue = [];
+let liveAppendScheduled = false;
 
 // Track how much we've already integrated into rawPoses/watches
 let liveLastPoseT = null; // last pose timestamp integrated
@@ -2101,25 +2141,40 @@ function parseLiveLineIntoState(line) {
   return { posesAdded: 0, watchesAdded: 0 };
 }
 
-function liveAppendLine(s) {
-  if (!liveWinEl) return;
-  const trimmed = (s.endsWith("\n") || s.endsWith("\r\n")) ? s : (s + "\n");
-  // keep it responsive (basic cap)
-  const MAX_CHARS = 200_000;
-  if (liveWinEl.value.length > MAX_CHARS) {
-    liveWinEl.value = liveWinEl.value.slice(liveWinEl.value.length - MAX_CHARS);
-  }
+function flushLiveAppend() {
+  liveAppendScheduled = false;
+  if (!liveWinEl || liveAppendQueue.length === 0) return;
+
   const nearBottom =
     (liveWinEl.scrollTop + liveWinEl.clientHeight >= liveWinEl.scrollHeight - 12);
 
-  // append + keep last ~2000 lines for perf
-  liveWinEl.value += trimmed;
+  liveWinEl.value += liveAppendQueue.join("");
+  liveAppendQueue = [];
+
+  // keep it responsive (basic cap)
+  const MAX_CHARS = 100_000;
+  if (liveWinEl.value.length > MAX_CHARS) {
+    liveWinEl.value = liveWinEl.value.slice(liveWinEl.value.length - MAX_CHARS);
+  }
+  // keep last ~2000 lines for perf
+  const MAX_LINES = 2000;
   const lines = liveWinEl.value.split("\n");
-  const MAX = 2000;
-  if (lines.length > MAX) liveWinEl.value = lines.slice(lines.length - MAX).join("\n");
+  if (lines.length > MAX_LINES) {
+    liveWinEl.value = lines.slice(lines.length - MAX_LINES).join("\n");
+  }
 
   // only autoscroll if user was already at bottom
   if (nearBottom) liveWinEl.scrollTop = liveWinEl.scrollHeight;
+}
+
+function liveAppendLine(s) {
+  if (!liveWinEl) return;
+  const trimmed = (s.endsWith("\n") || s.endsWith("\r\n")) ? s : (s + "\n");
+  liveAppendQueue.push(trimmed);
+  if (!liveAppendScheduled) {
+    liveAppendScheduled = true;
+    requestAnimationFrame(flushLiveAppend);
+  }
 }
 
 function stripToTag(line) {
@@ -2144,7 +2199,7 @@ function setLeftUi() {
   }
 
   if (btnLeftStop) {
-    btnLeftStop.disabled = !leftConnected;
+    btnLeftStop.disabled = !leftConnected || leftActionInFlight;
     if (!leftConnected) {
       btnLeftStop.title = "Starts streaming. Connect to start.";
       btnLeftStop.textContent = "Start";
@@ -2166,24 +2221,33 @@ function leftSetUI(reason) {
   if (btnLeftConnectEl) {
     btnLeftConnectEl.classList.toggle('isOn', !!leftConnected);
     btnLeftConnectEl.title = leftConnected ? "Disconnect" : "Connect";
+    btnLeftConnectEl.disabled = leftActionInFlight || btnLeftConnectEl.disabled;
   }
 
   // Start/Stop toggle state (this is btnLeftStop)
   if (btnLeftStopEl) {
     btnLeftStopEl.textContent = leftStreaming ? "Stop" : "Start";
-    btnLeftStopEl.disabled = !leftConnected;
+    btnLeftStopEl.disabled = !leftConnected || leftActionInFlight;
     btnLeftStopEl.title = leftConnected
       ? (leftStreaming ? "Stop streaming" : "Starts streaming.")
       : "Starts streaming. Connect to start.";
   }
 
   // Refresh controls only meaningful while connected
-  if (btnLeftRefreshEl) btnLeftRefreshEl.disabled = !leftConnected;
-  if (leftRefreshIntervalEl) leftRefreshIntervalEl.disabled = !leftConnected;
+  if (btnLeftRefreshEl) btnLeftRefreshEl.disabled = !leftConnected || leftActionInFlight;
+  if (leftRefreshIntervalEl) leftRefreshIntervalEl.disabled = !leftConnected || leftActionInFlight;
 
   if (reason) {
     liveAppendLine(`[UI] ${reason}`);
   }
+}
+
+function canRunLeftAction() {
+  const now = Date.now();
+  if (leftActionInFlight) return false;
+  if (now - leftActionLastAt < LEFT_ACTION_COOLDOWN_MS) return false;
+  leftActionLastAt = now;
+  return true;
 }
 
 async function apiPost(path) {
@@ -2198,14 +2262,21 @@ async function apiPost(path) {
   }
   const url = `${origin}${p}`;
 
-  const res = await fetch(url, { method: "POST" });
-  // Best-effort JSON; don't crash UI if server returns non-JSON or 404
-  let json = null;
-  try { json = await res.json(); } catch (e) {}
-  return { ok: res.ok, status: res.status, json };
+  try {
+    const res = await fetch(url, { method: "POST" });
+    // Best-effort JSON; don't crash UI if server returns non-JSON or 404
+    let json = null;
+    try { json = await res.json(); } catch (e) {}
+    return { ok: res.ok, status: res.status, json };
+  } catch (e) {
+    return { ok: false, status: 0, json: { status: e?.message || "request failed" } };
+  }
 }
 
-function connectLeft() {
+async function connectLeft() {
+  if (prosDirInput && prosDirInput.value && prosDirInput.value.trim()) {
+    await updateProsDir(prosDirInput.value);
+  }
   if (!prosDirValid) {
     liveAppendLine('[UI] Cannot connect: PROS project directory is not set or invalid. Set it in Settings → PROS Directory. Try restarting the application.');
     setStatus('Cannot connect: set a valid PROS directory in Settings first.');
@@ -2361,6 +2432,7 @@ async function startStreaming() {
   const r = await apiPost("/api/start");
   if (!r.ok) {
     liveAppendLine(`[api] start failed (${r.status})`);
+    liveAppendLine("Try restarting the application.");
     return false;
   }
   leftStreaming = true;
@@ -2388,25 +2460,40 @@ async function stopStreaming(forceKill = false, doMsg = true) {
 }
 
 // Connect toggle
-btnLeftConnectEl?.addEventListener('click', () => {
-  if (leftConnected) disconnectLeft();
-  else connectLeft();
+btnLeftConnectEl?.addEventListener('click', async () => {
+  if (!canRunLeftAction()) return;
+  leftActionInFlight = true;
+  setLeftUi();
+  try {
+    if (leftConnected) disconnectLeft();
+    else await connectLeft();
+  } finally {
+    leftActionInFlight = false;
+    setLeftUi();
+  }
 });
 
 // Start/Stop toggle (+ cmd/ctrl click => force kill)
 btnLeftStopEl?.addEventListener('click', async (e) => {
   if (!leftConnected) return;
-
-  const forceKill = !!(e?.metaKey || e?.ctrlKey);
-  if (forceKill) {
-    await stopStreaming(true);
-    return;
-  }
-
-  if (!leftStreaming) await startStreaming();
-  else await stopStreaming(false);
-  btnLeftConnectEl.title = leftConnected ? "Disconnect" : "Connect";
+  if (!canRunLeftAction()) return;
+  leftActionInFlight = true;
   setLeftUi();
+
+  try {
+    const forceKill = !!(e?.metaKey || e?.ctrlKey);
+    if (forceKill) {
+      await stopStreaming(true);
+      return;
+    }
+
+    if (!leftStreaming) await startStreaming();
+    else await stopStreaming(false);
+    btnLeftConnectEl.title = leftConnected ? "Disconnect" : "Connect";
+  } finally {
+    leftActionInFlight = false;
+    setLeftUi();
+  }
 });
 
 // Manual refresh button
@@ -2765,12 +2852,6 @@ if (helpModal) {
       closeHelp();
     }
   });
-  const helpEscapeHandler = (e) => {
-    if (e.key === 'Escape' && helpModal && helpModal.style.display !== 'none' && !helpModal.hasAttribute('hidden')) {
-      closeHelp();
-    }
-  };
-  window.addEventListener('keydown', helpEscapeHandler);
 } else {
   console.warn('helpModal not found');
 }
@@ -2780,29 +2861,22 @@ async function loadSettings() {
   try {
     let settings = null;
     if (invoke) {
-      try {
-        const saved = await invoke('read_settings');
-        if (saved) {
-          settings = JSON.parse(saved);
-        } else {
-          const legacy = localStorage.getItem('motionViewerSettings');
-          if (legacy) {
-            settings = JSON.parse(legacy);
-            await invoke('write_settings', { contents: JSON.stringify(settings) });
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to read JSON settings; falling back to localStorage:', e);
-        const legacy = localStorage.getItem('motionViewerSettings');
-        if (legacy) settings = JSON.parse(legacy);
+      const saved = await invoke('read_settings');
+      if (saved) {
+        settings = JSON.parse(saved);
+      } else {
+        // Create defaults on first run so the app data dir/file exists.
+        await saveSettings();
       }
     } else {
-      const legacy = localStorage.getItem('motionViewerSettings');
-      if (legacy) settings = JSON.parse(legacy);
+      console.warn('Settings persistence is unavailable (Tauri invoke missing).');
     }
 
     if (settings) {
-      if (settings.prosDir && prosDirInput) prosDirInput.value = settings.prosDir;
+      if (settings.prosDir && prosDirInput) {
+        prosDirInput.value = settings.prosDir;
+        prosDirFromSettings = true;
+      }
       if (settings.robotImageEnabled !== undefined) robotImageEnabled = settings.robotImageEnabled;
       if (settings.units) {
         if (settingsUnitsSelect) settingsUnitsSelect.value = settings.units;
@@ -2870,6 +2944,17 @@ async function loadSettings() {
         if (robotImageDataUrl) loadRobotImageFromDataUrl(robotImageDataUrl);
         else if (robotImagePath) loadRobotImageFromPath(robotImagePath);
       }
+      if (robotImageDataUrl && invoke && !robotImagePath) {
+        try {
+          const savedPath = await invoke('save_robot_image', { dataUrl: robotImageDataUrl });
+          if (savedPath) {
+            robotImagePath = savedPath;
+            await saveSettings();
+          }
+        } catch (e) {
+          console.warn('Failed to persist robot image to app data:', e);
+        }
+      }
       updateOffsetsFromInputs();
       computeSpeedNorm();
       if (robotImageToggle) robotImageToggle.checked = robotImageEnabled;
@@ -2898,7 +2983,7 @@ async function saveSettings() {
       robotImgRot: robotImgTx.rotDeg,
       robotImage: {
         path: robotImagePath || null,
-        dataUrl: robotImageDataUrl || null,
+        dataUrl: robotImagePath ? null : (robotImageDataUrl || null),
       },
       fieldRotation: fieldRotationDeg,
     };
@@ -2906,7 +2991,7 @@ async function saveSettings() {
     if (invoke) {
       await invoke('write_settings', { contents: payload });
     } else {
-      localStorage.setItem('motionViewerSettings', payload);
+      console.warn('Settings persistence is unavailable (Tauri invoke missing).');
     }
   } catch (e) {
     console.error('Failed to save settings:', e);
@@ -3033,6 +3118,9 @@ function openSettings() {
   } catch (e) {
     console.error('Error syncing settings:', e);
   }
+  if (prosDirInput && prosDirInput.value && prosDirInput.value.trim()) {
+    updateProsDir(prosDirInput.value);
+  }
   // Update robot image controls visibility
   if (settingsRobotImgControls) {
     settingsRobotImgControls.hidden = !(robotImageEnabled && robotImgOk);
@@ -3089,17 +3177,20 @@ if (settingsModal) {
       closeSettings();
     }
   });
-  
-  // Handle Escape key
-  const escapeHandler = (e) => {
-    if (e.key === 'Escape' && settingsModal && settingsModal.style.display !== 'none' && !settingsModal.hasAttribute('hidden')) {
-      closeSettings();
-    }
-  };
-  window.addEventListener('keydown', escapeHandler);
 } else {
   console.warn('settingsModal element not found');
 }
+
+// Global Escape handler: close modals and prevent window-level behavior
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const helpOpen = helpModal && helpModal.style.display !== 'none' && !helpModal.hasAttribute('hidden');
+  const settingsOpen = settingsModal && settingsModal.style.display !== 'none' && !settingsModal.hasAttribute('hidden');
+  if (helpOpen) closeHelp();
+  else if (settingsOpen) closeSettings();
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
 
 // Settings inputs event handlers
 if (settingsUnitsSelect) {
@@ -3181,6 +3272,59 @@ function setProsDirStatus(message, kind = 'info') {
   }
 }
 
+function setAutoStatus(message, kind = 'info') {
+  if (!prosDirAutoStatusEl) return;
+  prosDirAutoStatusEl.textContent = message;
+  if (kind === 'error') {
+    prosDirAutoStatusEl.style.color = '#ff9b9b';
+  } else if (kind === 'ok') {
+    prosDirAutoStatusEl.style.color = '#9fddb0';
+  } else {
+    prosDirAutoStatusEl.style.color = 'var(--muted)';
+  }
+}
+
+function renderAutoResults(candidates) {
+  if (!prosDirAutoResultsEl) return;
+  prosDirAutoResultsEl.innerHTML = '';
+  if (!candidates || !candidates.length) {
+    prosDirAutoResultsEl.textContent = '';
+    prosDirAutoResultsEl.style.color = 'var(--muted)';
+    return;
+  }
+  for (const dir of candidates) {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.gap = '8px';
+    row.style.alignItems = 'center';
+    row.style.marginBottom = '6px';
+
+    const pathEl = document.createElement('div');
+    pathEl.textContent = dir;
+    pathEl.style.flex = '1';
+    pathEl.style.fontFamily = 'monospace';
+    pathEl.style.fontSize = '12px';
+
+    const useBtn = document.createElement('button');
+    useBtn.className = 'iconBtn';
+    useBtn.style.fontSize = '11px';
+    useBtn.textContent = 'Use';
+    useBtn.addEventListener('click', () => {
+      if (!prosDirInput) return;
+      prosDirInput.value = dir;
+      prosDirFromSettings = true;
+      updateProsDir(dir);
+      saveSettings();
+      renderAutoResults([]);
+      setAutoStatus('Applied.', 'ok');
+    });
+
+    row.appendChild(pathEl);
+    row.appendChild(useBtn);
+    prosDirAutoResultsEl.appendChild(row);
+  }
+}
+
 // PROS directory input
 async function updateProsDir(dir) {
   const trimmed = (dir || '').trim();
@@ -3192,6 +3336,9 @@ async function updateProsDir(dir) {
     return;
   }
 
+  if (trimmed === "None" /*None is default state */) {
+    return;
+  }
   try {
     const origin = refreshBridgeOrigin();
     if (!origin) {
@@ -3248,14 +3395,27 @@ if (prosDirInput) {
 }
 
 // PROS directory browse button (placeholder - could use Tauri dialog API)
-if (btnProsDirBrowse) {
-  btnProsDirBrowse.addEventListener('click', () => {
-    // For now, just focus the input. Could use Tauri dialog API for file picker:
-    // import { open } from '@tauri-apps/api/dialog';
-    // const selected = await open({ directory: true });
-    if (prosDirInput) {
-      prosDirInput.focus();
-      prosDirInput.select();
+if (btnProsDirAuto) {
+  btnProsDirAuto.addEventListener('click', async () => {
+    if (!refreshBridgeOrigin()) {
+      setAutoStatus('Backend not ready.', 'error');
+      return;
+    }
+    setAutoStatus('Scanning…');
+    try {
+      const response = await fetch(`${ORIGIN}/api/pros-dir/auto`);
+      const result = await response.json();
+      if (!result.ok) {
+        setAutoStatus(result.status || 'Auto-detect failed.', 'error');
+        renderAutoResults([]);
+        return;
+      }
+      renderAutoResults(result.candidates || []);
+      setAutoStatus(`Found ${result.candidates?.length || 0} project(s).`, 'ok');
+    } catch (e) {
+      console.error('Auto-detect failed:', e);
+      setAutoStatus('Auto-detect failed.', 'error');
+      renderAutoResults([]);
     }
   });
 }
@@ -3267,6 +3427,8 @@ async function loadProsDirFromAPI() {
     const response = await fetch(`${ORIGIN}/api/pros-dir`);
     const result = await response.json();
     if (result.ok && result.dir && prosDirInput) {
+      const hasUserDir = prosDirFromSettings || (prosDirInput.value && prosDirInput.value.trim());
+      if (hasUserDir) return;
       prosDirInput.value = result.dir;
       prosDirValid = true;
       setProsDirStatus(`Using PROS project: ${result.dir}`, 'ok');
@@ -3286,7 +3448,7 @@ function updateConnectButtonState() {
   if (!btnLeftConnect) return;
   const hasProsDir = prosDirInput && prosDirInput.value && prosDirInput.value.trim();
   // Connect button should be enabled if PROS dir is set OR if we're already connected
-  btnLeftConnect.disabled = !hasProsDir && !leftConnected;
+  btnLeftConnect.disabled = (!hasProsDir && !leftConnected) || leftActionInFlight;
 }
 
 // Robot image upload
@@ -3304,7 +3466,7 @@ if (robotImageFile) {
     
     try {
       const reader = new FileReader();
-      reader.onload = (event) => {
+      reader.onload = async (event) => {
         const img = new Image();
         img.onload = () => {
           robotImg = img;
@@ -3314,7 +3476,6 @@ if (robotImageFile) {
           if (robotImgControlsEl) robotImgControlsEl.hidden = false;
           if (settingsRobotImgControls && robotImageEnabled) settingsRobotImgControls.hidden = false;
           draw();
-          saveSettings();
         };
         img.onerror = () => {
           setStatus("Failed to load uploaded robot image.");
@@ -3322,6 +3483,15 @@ if (robotImageFile) {
           robotImgOk = false;
         };
         img.src = event.target.result;
+        try {
+          if (invoke && event.target?.result) {
+            const savedPath = await invoke('save_robot_image', { dataUrl: event.target.result });
+            if (savedPath) robotImagePath = savedPath;
+          }
+        } catch (saveErr) {
+          console.warn('Failed to persist robot image to app data:', saveErr);
+        }
+        saveSettings();
       };
       reader.onerror = () => {
         setStatus("Failed to read robot image file.");

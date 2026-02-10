@@ -5,9 +5,9 @@ use std::{
   process::{Child, Command},
   sync::Mutex,
 };
+use std::{fs, process::Stdio};
 
 use tauri::{Manager, RunEvent};
-use tauri::AppHandle;
 use tauri::path::BaseDirectory;
 
 mod settings;
@@ -35,26 +35,64 @@ fn resolve_bridge(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
   )))
 }
 
-fn project_root(handle: &AppHandle) -> tauri::Result<PathBuf> {
-  #[cfg(debug_assertions)]
-  {
-    // If src-tauri is a subdir, repo root is parent of CARGO_MANIFEST_DIR.
-    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .parent()
-      .unwrap()
-      .to_path_buf())
-  }
-
-  #[cfg(not(debug_assertions))]
-  {
-    Ok(handle.path().resource_dir()?)
-  }
-}
-
-fn stop_bridge(state: &tauri::State<BridgeState>) {
+fn stop_bridge(state: &tauri::State<BridgeState>, app: &tauri::AppHandle) {
   if let Some(mut child) = state.0.lock().unwrap().take() {
     let _ = child.kill();
     let _ = child.wait(); // avoid zombie
+  }
+  if let Ok(path) = pid_path(app) {
+    let _ = fs::remove_file(path);
+  }
+}
+
+fn pid_path(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
+  app.path()
+    .app_data_dir()
+    .map(|dir| dir.join("bridge.pid"))
+}
+
+#[cfg(unix)]
+fn kill_pid(pid: u32) {
+  let _ = Command::new("kill")
+    .arg("-9")
+    .arg(pid.to_string())
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status();
+}
+
+#[cfg(windows)]
+fn kill_pid(pid: u32) {
+  let _ = Command::new("taskkill")
+    .args(["/PID", &pid.to_string(), "/T", "/F"])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status();
+}
+
+fn cleanup_previous_bridge(app: &tauri::AppHandle) {
+  let path = match pid_path(app) {
+    Ok(p) => p,
+    Err(_) => return,
+  };
+  let pid_str = match fs::read_to_string(&path) {
+    Ok(s) => s,
+    Err(_) => return,
+  };
+  if let Ok(pid) = pid_str.trim().parse::<u32>() {
+    kill_pid(pid);
+  }
+  let _ = fs::remove_file(path);
+}
+
+fn write_bridge_pid(app: &tauri::AppHandle, pid: u32) {
+  if let Ok(path) = pid_path(app) {
+    if let Some(parent) = path.parent() {
+      let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, pid.to_string());
   }
 }
 
@@ -82,11 +120,14 @@ fn main() {
     .invoke_handler(tauri::generate_handler![
       settings::read_settings,
       settings::write_settings,
-      settings::read_image_data
+      settings::read_image_data,
+      settings::save_robot_image
     ])
     .setup(|app| {
+      cleanup_previous_bridge(app.handle());
       let port = pick_free_port();
       let child = spawn_bridge(app.handle(), port)?;
+      write_bridge_pid(app.handle(), child.id());
       *app.state::<BridgeState>().0.lock().unwrap() = Some(child);
 
       // Tell frontend where backend is
@@ -100,32 +141,27 @@ fn main() {
     .build(tauri::generate_context!())
     .expect("error building tauri app")
     .run(|app_handle, event| {
-      if let RunEvent::ExitRequested { .. } = event {
-        if let Some(mut child) = app_handle.state::<BridgeState>().0.lock().unwrap().take() {
-          let _ = child.kill();
-        }
       match event {
         // Fires when any window is closed/destroyed (covers clicking the red X)
         RunEvent::WindowEvent { label, event, .. } => {
           if label == "main" {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-              stop_bridge(&app_handle.state::<BridgeState>());
+              stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
             }
           }
         }
 
         // Fires when the app is exiting normally
         RunEvent::Exit => {
-          stop_bridge(&app_handle.state::<BridgeState>());
+          stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
         }
 
         // Fires on quit requests (Cmd+Q / Dock Quit / menu Quit)
         RunEvent::ExitRequested { .. } => {
-          stop_bridge(&app_handle.state::<BridgeState>());
+          stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
         }
 
         _ => {}
       }
-    }
     });
 }

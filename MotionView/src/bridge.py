@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Set, List
 import platform
 import re
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
@@ -227,6 +228,14 @@ async def ws_endpoint(websocket: WebSocket):
 
 async def broadcast(line: str):
     line = strip_ansi(line)
+    if "resolve_v5_port - No v5 ports were found" in line:
+        line = "No v5 devices were found."
+    elif (
+        "Sentry is attempting to send" in line
+        or "Waiting up to" in line
+        or "Press Ctrl-C to quit" in line
+    ):
+        return
 
     async with _clients_lock:
         current = list(clients)
@@ -512,6 +521,47 @@ async def api_get_pros_dir():
     lock = _get_lock()
     async with lock:
         return {"ok": True, "dir": str(PROS_PROJECT_DIR)}
+
+def _search_roots_for_pros() -> List[Path]:
+    home = Path.home()
+    roots = [
+        home / "Documents",
+        home / "Desktop",
+        home / "Projects",
+        home / "Code",
+        home / "pros",
+    ]
+    return [r for r in roots if r.exists() and r.is_dir()]
+
+def _find_pros_projects(max_depth: int = 4, max_results: int = 10, time_budget_s: float = 1.5) -> List[str]:
+    """
+    Find directories containing a PROS project (project.pros) under common roots.
+    Bounded by depth, results, and a short time budget to keep UI responsive.
+    """
+    results: List[str] = []
+    start = time.time()
+    for root in _search_roots_for_pros():
+        for dirpath, dirnames, filenames in os.walk(root):
+            if time.time() - start > time_budget_s:
+                return results
+            depth = len(Path(dirpath).relative_to(root).parts)
+            if depth > max_depth:
+                dirnames[:] = []
+                continue
+            if "project.pros" in filenames:
+                results.append(str(Path(dirpath).resolve()))
+                if len(results) >= max_results:
+                    return results
+    return results
+
+@app.get("/api/pros-dir/auto")
+async def api_auto_pros_dir():
+    """Auto-detect PROS projects and return candidates."""
+    try:
+        candidates = _find_pros_projects()
+        return {"ok": True, "candidates": candidates}
+    except Exception as e:
+        return {"ok": False, "status": f"error: {e}", "candidates": []}
 
 @app.post("/api/pros-dir")
 async def api_set_pros_dir(request: Request):

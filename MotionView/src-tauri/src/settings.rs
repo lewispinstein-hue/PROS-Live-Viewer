@@ -4,25 +4,49 @@ use tauri::{AppHandle, Manager};
 use base64::Engine as _;
 
 const SETTINGS_FILE: &str = "user-preferences.json";
+const ROBOT_IMAGE_FILE_BASE: &str = "robot-image";
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
-        .app_config_dir()
+        .app_data_dir()
         .map_err(|e: tauri::Error| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(SETTINGS_FILE))
+}
+
+fn legacy_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e: tauri::Error| e.to_string())?;
     Ok(dir.join(SETTINGS_FILE))
 }
 
 #[tauri::command]
 pub fn read_settings(app: AppHandle) -> Result<Option<String>, String> {
     let path = settings_path(&app)?;
-    if !path.exists() {
+    if path.exists() {
+        return std::fs::read_to_string(path)
+            .map(Some)
+            .map_err(|e| e.to_string());
+    }
+
+    let legacy_path = legacy_settings_path(&app)?;
+    if !legacy_path.exists() {
         return Ok(None);
     }
-    std::fs::read_to_string(path)
-        .map(Some)
-        .map_err(|e| e.to_string())
+
+    let contents = std::fs::read_to_string(&legacy_path).map_err(|e| e.to_string())?;
+    // Best-effort migration to the new location.
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_ok() {
+            if std::fs::write(&path, &contents).is_ok() {
+                let _ = std::fs::remove_file(&legacy_path);
+            }
+        }
+    }
+    Ok(Some(contents))
 }
 
 #[tauri::command]
@@ -44,6 +68,36 @@ fn mime_from_ext(path: &std::path::Path) -> &'static str {
     }
 }
 
+fn ext_from_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
+    }
+}
+
+fn parse_data_url(data_url: &str) -> Result<(String, Vec<u8>), String> {
+    let (meta, b64) = data_url
+        .split_once(',')
+        .ok_or_else(|| "invalid data URL".to_string())?;
+    if !meta.starts_with("data:") || !meta.contains(";base64") {
+        return Err("invalid data URL header".into());
+    }
+    let mime = meta
+        .strip_prefix("data:")
+        .and_then(|m| m.split(';').next())
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| "missing mime type".to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| e.to_string())?;
+    Ok((mime.to_string(), bytes))
+}
+
 #[tauri::command]
 pub fn read_image_data(path: String) -> Result<String, String> {
     let p = std::path::PathBuf::from(path);
@@ -57,4 +111,20 @@ pub fn read_image_data(path: String) -> Result<String, String> {
     let mime = mime_from_ext(&p);
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     Ok(format!("data:{mime};base64,{b64}"))
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn save_robot_image(app: AppHandle, dataUrl: String) -> Result<String, String> {
+    let (mime, bytes) = parse_data_url(&dataUrl)?;
+    let ext = ext_from_mime(&mime);
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e: tauri::Error| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let filename = format!("{ROBOT_IMAGE_FILE_BASE}.{ext}");
+    let path = dir.join(filename);
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
