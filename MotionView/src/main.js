@@ -1,8 +1,8 @@
-const invoke = window.__TAURI__?.core?.invoke;
+const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
 if (!invoke) console.warn("Tauri API not available; running in browser?");
 
-const ORIGIN = window.__BRIDGE_ORIGIN__ ?? null;
-const WS_ORIGIN = ORIGIN ? ORIGIN.replace(/^http/, "ws") : null;
+let ORIGIN = window.__BRIDGE_ORIGIN__ ?? null;
+let WS_ORIGIN = ORIGIN ? ORIGIN.replace(/^http/, "ws") : null;
 
 const root = document.documentElement;
 // Live streaming state shared across handlers (avoids TDZ issues)
@@ -86,6 +86,7 @@ const settingsRobotImgScale = document.getElementById('settingsRobotImgScale');
 const settingsRobotImgOffX = document.getElementById('settingsRobotImgOffX');
 const settingsRobotImgOffY = document.getElementById('settingsRobotImgOffY');
 const settingsRobotImgRot = document.getElementById('settingsRobotImgRot');
+const settingsFieldRotation = document.getElementById('settingsFieldRotation');
 const settingsUnitsSelect = document.getElementById('settingsUnitsSelect');
 const settingsRobotW = document.getElementById('settingsRobotW');
 const settingsRobotH = document.getElementById('settingsRobotH');
@@ -97,6 +98,8 @@ const settingsMaxSpeed = document.getElementById('settingsMaxSpeed');
 
 const prosDirStatusEl = document.getElementById('prosDirStatus');
 let prosDirValid = false;
+let prosDirRetryTimer = null;
+let prosDirRetryAttempts = 0;
 
 // --- FIELD IMAGES ---
 const FIELD_IMAGES = [
@@ -175,8 +178,14 @@ let robotImg = null;
 let robotImgOk = false;
 let robotImgLoadTried = false;
 let robotImageEnabled = true; // toggle for showing/hiding robot image
+let robotImagePath = null;
+let robotImageDataUrl = null;
 
 const robotImgTx = { scale: 1, offXIn: 0, offYIn: 0, rotDeg: 0 };
+let fieldRotationDeg = 0;
+let fieldRotationRad = 0;
+let fieldRotationCos = 1;
+let fieldRotationSin = 0;
 
 // view controls (pan/zoom) + square maximize mode
 let squareMode = true;
@@ -197,6 +206,7 @@ let suppressNextClick = false;
 // offsets: entered in selected units, stored as inches for rendering
 const offsetsIn = { x: 0, y: 0, theta: 0 };
 let unitsToInFactor = 1;
+let currentUnits = "in";
 
 // -------- utilities --------
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -240,10 +250,12 @@ function robotDimsInches() {
 
 // -------- units/offsets --------
 function setUnitsFactorFromSelect(value) {
-  if (value === "cm") unitsToInFactor = 1 / 2.54;
-  else if (value === "ft") unitsToInFactor = 12;
-  else if (value === "tiles") unitsToInFactor = 24;
+  const v = String(value || "in");
+  if (v === "cm") unitsToInFactor = 1 / 2.54;
+  else if (v === "ft") unitsToInFactor = 12;
+  else if (v === "tiles") unitsToInFactor = 24;
   else unitsToInFactor = 1;
+  currentUnits = v;
 }
 
 function inferUnitsFromMeta(metaUnits) {
@@ -359,6 +371,15 @@ function poseToInches(p) {
 
 function getPosesInches() { return rawPoses.map(poseToInches); }
 
+function refreshBridgeOrigin() {
+  const next = window.__BRIDGE_ORIGIN__ ?? null;
+  if (next && next !== ORIGIN) {
+    ORIGIN = next;
+    WS_ORIGIN = ORIGIN ? ORIGIN.replace(/^http/, "ws") : null;
+  }
+  return ORIGIN;
+}
+
 // -------- canvas sizing/transform --------
 function computeTransform() {
   const w = canvas.getBoundingClientRect().width;
@@ -385,12 +406,34 @@ function computeTransform() {
   offsetYpx = baseOffsetYpx * viewZoom + viewPanYpx;
 }
 
+function normalizeFieldRotation(deg) {
+  const norm = ((deg % 360) + 360) % 360;
+  if (norm === 90 || norm === 180 || norm === 270) return norm;
+  return 0;
+}
+
+function setFieldRotationDeg(deg) {
+  fieldRotationDeg = normalizeFieldRotation(deg);
+  fieldRotationRad = fieldRotationDeg * Math.PI / 180;
+  fieldRotationCos = Math.cos(fieldRotationRad);
+  fieldRotationSin = Math.sin(fieldRotationRad);
+  if (settingsFieldRotation) settingsFieldRotation.value = String(fieldRotationDeg);
+  requestDrawAll();
+}
+
 function worldToScreen(xIn, yIn) {
-  return { x: offsetXpx + xIn * scale, y: offsetYpx - yIn * scale };
+  const xR = xIn * fieldRotationCos - yIn * fieldRotationSin;
+  const yR = xIn * fieldRotationSin + yIn * fieldRotationCos;
+  return { x: offsetXpx + xR * scale, y: offsetYpx - yR * scale };
 }
 
 function screenToWorld(xPx, yPx) {
-  return { x: (xPx - offsetXpx) / (scale || 1), y: (offsetYpx - yPx) / (scale || 1) };
+  const xR = (xPx - offsetXpx) / (scale || 1);
+  const yR = (offsetYpx - yPx) / (scale || 1);
+  return {
+    x: xR * fieldRotationCos + yR * fieldRotationSin,
+    y: -xR * fieldRotationSin + yR * fieldRotationCos,
+  };
 }
 
 function resizeCanvas() {
@@ -466,7 +509,6 @@ function loadRobotImage() {
     robotImgOk = false;
     if (robotImgControlsEl) robotImgControlsEl.hidden = true;
     if (settingsRobotImgControls) settingsRobotImgControls.hidden = true;
-    setStatus("robot_image.png not found or failed to load; using default robot box.");
     draw();
   };
   img.src = "./robot_image.png";
@@ -862,15 +904,18 @@ function drawField() {
   ctx.fillRect(0, 0, w, h);
 
   if (!fieldImg) return;
-  const p0 = worldToScreen(bounds.minX, bounds.minY);
-  const p1 = worldToScreen(bounds.maxX, bounds.maxY);
-  const left = Math.min(p0.x, p1.x);
-  const top = Math.min(p0.y, p1.y);
-  const right = Math.max(p0.x, p1.x);
-  const bottom = Math.max(p0.y, p1.y);
+  const center = worldToScreen(0, 0);
+  const wIn = (bounds.maxX - bounds.minX) || 1;
+  const hIn = (bounds.maxY - bounds.minY) || 1;
+  const wPx = wIn * scale;
+  const hPx = hIn * scale;
 
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(fieldRotationRad);
   ctx.globalAlpha = 0.95;
-  ctx.drawImage(fieldImg, left, top, right - left, bottom - top);
+  ctx.drawImage(fieldImg, -wPx / 2, -hPx / 2, wPx, hPx);
+  ctx.restore();
   ctx.globalAlpha = 1.0;
 }
 
@@ -878,10 +923,14 @@ function drawAxes() {
   const w = canvas.getBoundingClientRect().width;
   const h = canvas.getBoundingClientRect().height;
   const o = worldToScreen(0, 0);
+  const ax0 = worldToScreen(bounds.minX, 0);
+  const ax1 = worldToScreen(bounds.maxX, 0);
+  const ay0 = worldToScreen(0, bounds.minY);
+  const ay1 = worldToScreen(0, bounds.maxY);
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, o.y); ctx.lineTo(w, o.y); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(o.x, 0); ctx.lineTo(o.x, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ax0.x, ax0.y); ctx.lineTo(ax1.x, ax1.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ay0.x, ay0.y); ctx.lineTo(ay1.x, ay1.y); ctx.stroke();
 }
 
 function drawPath() {
@@ -953,7 +1002,7 @@ function drawRobot(pose, alpha=1.0) {
   const center = worldToScreen(pose.x, pose.y);
   const wPx = wIn * scale;
   const hPx = hIn * scale;
-  const thetaDeg = (pose.theta ?? 0);
+  const thetaDeg = (pose.theta ?? 0) - fieldRotationDeg;
   const thetaRad = (thetaDeg) * Math.PI / 180;
 
   ctx.save();
@@ -1009,6 +1058,50 @@ function drawRobot(pose, alpha=1.0) {
   ctx.fill();
 
   ctx.restore();
+}
+
+async function loadRobotImageFromPath(path) {
+  if (!path || !invoke) return;
+  try {
+    const dataUrl = await invoke('read_image_data', { path });
+    robotImageDataUrl = dataUrl;
+    await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        robotImg = img;
+        robotImgOk = true;
+        robotImgLoadTried = true;
+        if (robotImgControlsEl) robotImgControlsEl.hidden = false;
+        if (settingsRobotImgControls && robotImageEnabled) settingsRobotImgControls.hidden = false;
+        requestDrawAll();
+        resolve();
+      };
+      img.onerror = () => reject(new Error('failed to load robot image from saved path'));
+      img.src = dataUrl;
+    });
+  } catch (e) {
+    console.error('Failed to load robot image from path:', e);
+    setStatus(`Failed to load robot image from path: ${e.message || e}`);
+  }
+}
+
+function loadRobotImageFromDataUrl(dataUrl) {
+  if (!dataUrl) return;
+  const img = new Image();
+  img.onload = () => {
+    robotImg = img;
+    robotImgOk = true;
+    robotImgLoadTried = true;
+    if (robotImgControlsEl) robotImgControlsEl.hidden = false;
+    if (settingsRobotImgControls && robotImageEnabled) settingsRobotImgControls.hidden = false;
+    requestDrawAll();
+  };
+  img.onerror = () => {
+    setStatus("Failed to load saved robot image.");
+    robotImg = null;
+    robotImgOk = false;
+  };
+  img.src = dataUrl;
 }
 
 function currentDisplayPose() {
@@ -2046,6 +2139,7 @@ function setLeftUi() {
     btnLeftConnect.classList.toggle('isOn', leftConnected);
     btnLeftConnect.textContent = leftConnected ? "Disconnect" : "Connect";
     btnPlay.disabled = leftConnected;
+    btnFile.disabled = leftConnected;
     updateConnectButtonState();
   }
 
@@ -2098,7 +2192,11 @@ async function apiPost(path) {
 
   // ensure leading slash
   const p = path.startsWith("/") ? path : `/${path}`;
-  const url = `${ORIGIN}${p}`;
+  const origin = refreshBridgeOrigin();
+  if (!origin) {
+    return { ok: false, status: 0, json: { status: "bridge origin not ready" } };
+  }
+  const url = `${origin}${p}`;
 
   const res = await fetch(url, { method: "POST" });
   // Best-effort JSON; don't crash UI if server returns non-JSON or 404
@@ -2109,14 +2207,16 @@ async function apiPost(path) {
 
 function connectLeft() {
   if (!prosDirValid) {
-    liveAppendLine('[UI] Cannot connect: PROS project directory is not set or invalid. Set it in Settings → PROS Directory.');
+    liveAppendLine('[UI] Cannot connect: PROS project directory is not set or invalid. Set it in Settings → PROS Directory. Try restarting the application.');
     setStatus('Cannot connect: set a valid PROS directory in Settings first.');
     return;
   }
+  refreshBridgeOrigin();
   if (ORIGIN == null || WS_ORIGIN == null) {
     setLeftUi("Child process Bridge.py was not given a port. Live streaming cannot start.");
     return;
   }
+  pause();
   stopStreaming(false, false);
   if (leftWs) return;
   leftWs = new WebSocket(`${WS_ORIGIN}/ws`);
@@ -2153,7 +2253,6 @@ function connectLeft() {
     leftStreaming = false;
     if (window.__live) { window.__live.connected = false; window.__live.streaming = false; }
     stopLeftRefresh();
-    leftSetUI("Disconnected");
   });
 
   leftWs.addEventListener("error", () => {
@@ -2529,7 +2628,7 @@ leftSetUI("");
 
 // -------- data load --------
 function setData(obj) {
-  data = obj;'lu'
+  data = obj;
   if (!obj || !Array.isArray(obj.poses)) {
     setStatus("Invalid viewer JSON: missing poses[]");
     return;
@@ -2551,34 +2650,8 @@ function setData(obj) {
   // watches: accept alternate key just in case
   watches = normalizeWatches(obj.watches || obj.watch || obj.events || []);
 
-  const inferred = inferUnitsFromMeta(obj?.meta?.units);
-  // unitsSelect was removed from DOM, use settingsUnitsSelect instead
-  if (settingsUnitsSelect) {
-    settingsUnitsSelect.value = inferred;
-  }
-  // Also update the old unitsSelect if it still exists (for backwards compatibility)
-  if (unitsSelect) {
-    unitsSelect.value = inferred;
-  }
-  setUnitsFactorFromSelect(inferred);
-
-  const rw = obj?.meta?.robot?.width;
-  const rh = obj?.meta?.robot?.height;
-  if (robotWEl) robotWEl.value = (typeof rw === "number" && isFinite(rw)) ? String(rw) : "12";
-  if (robotHEl) robotHEl.value = (typeof rh === "number" && isFinite(rh)) ? String(rh) : "12";
-  if (settingsRobotW) settingsRobotW.value = (typeof rw === "number" && isFinite(rw)) ? String(rw) : "12";
-  if (settingsRobotH) settingsRobotH.value = (typeof rh === "number" && isFinite(rh)) ? String(rh) : "12";
-
-  const mx = toNumMaybe(obj?.meta?.offset_x);
-  const my = toNumMaybe(obj?.meta?.offset_y);
-  const mt = toNumMaybe(obj?.meta?.offset_theta);
-
-  if (offXEl) offXEl.value = (typeof mx === "number" && isFinite(mx)) ? String(clamp(mx, -OFFSET_MAX, OFFSET_MAX)) : "0";
-  if (offYEl) offYEl.value = (typeof my === "number" && isFinite(my)) ? String(clamp(my, -OFFSET_MAX, OFFSET_MAX)) : "0";
-  if (offThetaEl) offThetaEl.value = (typeof mt === "number" && isFinite(mt)) ? String(clamp(mt, -OFFSET_MAX, OFFSET_MAX)) : "0";
-  if (settingsOffX) settingsOffX.value = (typeof mx === "number" && isFinite(mx)) ? String(clamp(mx, -OFFSET_MAX, OFFSET_MAX)) : "0";
-  if (settingsOffY) settingsOffY.value = (typeof my === "number" && isFinite(my)) ? String(clamp(my, -OFFSET_MAX, OFFSET_MAX)) : "0";
-  if (settingsOffTheta) settingsOffTheta.value = (typeof mt === "number" && isFinite(mt)) ? String(clamp(mt, -OFFSET_MAX, OFFSET_MAX)) : "0";
+  const currentUnits = settingsUnitsSelect?.value || unitsSelect?.value || 'in';
+  setUnitsFactorFromSelect(currentUnits);
   updateOffsetsFromInputs();
 
   computeSpeedNorm();
@@ -2702,12 +2775,33 @@ if (helpModal) {
   console.warn('helpModal not found');
 }
 
-// Settings modal and localStorage persistence
-function loadSettings() {
+// Settings modal and JSON persistence
+async function loadSettings() {
   try {
-    const saved = localStorage.getItem('motionViewerSettings');
-    if (saved) {
-      const settings = JSON.parse(saved);
+    let settings = null;
+    if (invoke) {
+      try {
+        const saved = await invoke('read_settings');
+        if (saved) {
+          settings = JSON.parse(saved);
+        } else {
+          const legacy = localStorage.getItem('motionViewerSettings');
+          if (legacy) {
+            settings = JSON.parse(legacy);
+            await invoke('write_settings', { contents: JSON.stringify(settings) });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to read JSON settings; falling back to localStorage:', e);
+        const legacy = localStorage.getItem('motionViewerSettings');
+        if (legacy) settings = JSON.parse(legacy);
+      }
+    } else {
+      const legacy = localStorage.getItem('motionViewerSettings');
+      if (legacy) settings = JSON.parse(legacy);
+    }
+
+    if (settings) {
       if (settings.prosDir && prosDirInput) prosDirInput.value = settings.prosDir;
       if (settings.robotImageEnabled !== undefined) robotImageEnabled = settings.robotImageEnabled;
       if (settings.units) {
@@ -2763,6 +2857,19 @@ function loadSettings() {
         if (robotImgRotEl) robotImgRotEl.value = settings.robotImgRot;
         if (settingsRobotImgRot) settingsRobotImgRot.value = settings.robotImgRot;
       }
+      if (settings.fieldRotation !== undefined) {
+        setFieldRotationDeg(Number(settings.fieldRotation) || 0);
+      }
+      if (settings.robotImage?.path) {
+        robotImagePath = settings.robotImage.path;
+      }
+      if (settings.robotImage?.dataUrl) {
+        robotImageDataUrl = settings.robotImage.dataUrl;
+      }
+      if (robotImageEnabled) {
+        if (robotImageDataUrl) loadRobotImageFromDataUrl(robotImageDataUrl);
+        else if (robotImagePath) loadRobotImageFromPath(robotImagePath);
+      }
       updateOffsetsFromInputs();
       computeSpeedNorm();
       if (robotImageToggle) robotImageToggle.checked = robotImageEnabled;
@@ -2772,7 +2879,7 @@ function loadSettings() {
   }
 }
 
-function saveSettings() {
+async function saveSettings() {
   try {
     const settings = {
       prosDir: prosDirInput ? prosDirInput.value : '',
@@ -2789,8 +2896,18 @@ function saveSettings() {
       robotImgOffX: robotImgTx.offXIn,
       robotImgOffY: robotImgTx.offYIn,
       robotImgRot: robotImgTx.rotDeg,
+      robotImage: {
+        path: robotImagePath || null,
+        dataUrl: robotImageDataUrl || null,
+      },
+      fieldRotation: fieldRotationDeg,
     };
-    localStorage.setItem('motionViewerSettings', JSON.stringify(settings));
+    const payload = JSON.stringify(settings);
+    if (invoke) {
+      await invoke('write_settings', { contents: payload });
+    } else {
+      localStorage.setItem('motionViewerSettings', payload);
+    }
   } catch (e) {
     console.error('Failed to save settings:', e);
   }
@@ -2798,9 +2915,11 @@ function saveSettings() {
 
 function syncSettingsToMain() {
   // Sync from settings modal to main inputs
-  if (!settingsUnitsSelect || !unitsSelect) return;
-  if (settingsUnitsSelect.value !== unitsSelect.value) {
+  if (!settingsUnitsSelect) return;
+  if (unitsSelect && settingsUnitsSelect.value !== unitsSelect.value) {
     unitsSelect.value = settingsUnitsSelect.value;
+  }
+  if (settingsUnitsSelect.value !== currentUnits) {
     setUnitsFactorFromSelect(settingsUnitsSelect.value);
     updateOffsetsFromInputs();
   }
@@ -2988,6 +3107,12 @@ if (settingsUnitsSelect) {
     syncSettingsToMain();
   });
 }
+if (settingsFieldRotation) {
+  settingsFieldRotation.addEventListener('change', () => {
+    setFieldRotationDeg(Number(settingsFieldRotation.value) || 0);
+    saveSettings();
+  });
+}
 if (settingsRobotW) {
   settingsRobotW.addEventListener('input', () => {
     syncSettingsToMain();
@@ -3068,7 +3193,22 @@ async function updateProsDir(dir) {
   }
 
   try {
-    const response = await fetch(`${ORIGIN}/api/pros-dir`, {
+    const origin = refreshBridgeOrigin();
+    if (!origin) {
+      prosDirValid = false;
+      setProsDirStatus('Bridge not ready yet. Retrying...', 'error');
+      updateConnectButtonState();
+      if (prosDirRetryTimer) clearTimeout(prosDirRetryTimer);
+      if (prosDirRetryAttempts < 5) {
+        prosDirRetryAttempts += 1;
+        prosDirRetryTimer = setTimeout(() => updateProsDir(trimmed), 500);
+      } else {
+        setProsDirStatus('Bridge not ready yet. Try again in a moment.', 'error');
+      }
+      return;
+    }
+    prosDirRetryAttempts = 0;
+    const response = await fetch(`${origin}/api/pros-dir`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dir: trimmed })
@@ -3089,8 +3229,8 @@ async function updateProsDir(dir) {
   } catch (e) {
     prosDirValid = false;
     console.error('Error updating PROS directory:', e);
-    setStatus(`Error updating PROS directory: ${e.message}`);
-    setProsDirStatus('Error validating PROS directory.', 'error');
+    setStatus(`Error updating PROS directory: ${e.message || e}`);
+    setProsDirStatus(`Error validating PROS directory: ${e.message || e}`, 'error');
     updateConnectButtonState();
   }
 }
@@ -3122,7 +3262,7 @@ if (btnProsDirBrowse) {
 
 // Load PROS directory from API on startup
 async function loadProsDirFromAPI() {
-  if (!ORIGIN) return;
+  if (!refreshBridgeOrigin()) return;
   try {
     const response = await fetch(`${ORIGIN}/api/pros-dir`);
     const result = await response.json();
@@ -3160,6 +3300,7 @@ if (robotImageFile) {
   robotImageFile.addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    robotImagePath = typeof file.path === 'string' && file.path ? file.path : null;
     
     try {
       const reader = new FileReader();
@@ -3169,6 +3310,7 @@ if (robotImageFile) {
           robotImg = img;
           robotImgOk = true;
           robotImgLoadTried = true;
+          robotImageDataUrl = event.target.result;
           if (robotImgControlsEl) robotImgControlsEl.hidden = false;
           if (settingsRobotImgControls && robotImageEnabled) settingsRobotImgControls.hidden = false;
           draw();
@@ -3229,9 +3371,10 @@ if (fieldSelect) {
 
 if (unitsSelect) {
   unitsSelect.addEventListener('change', (e) => {
-    setUnitsFactorFromSelect(e.target.value);
-    updateOffsetsFromInputs();
-    requestDrawAll();
+    if (e.target.value !== currentUnits) {
+      setUnitsFactorFromSelect(e.target.value);
+      updateOffsetsFromInputs();
+    }
     syncMainToSettings();
     saveSettings();
   });
@@ -3250,10 +3393,15 @@ robotHEl.addEventListener('input', () => {
 });
 
 function syncRobotImgTxFromInputs() {
-  robotImgTx.scale = clamp(Number(robotImgScaleEl?.value || 1), 0.05, 20);
-  robotImgTx.offXIn = Number(robotImgOffXEl?.value || 0);
-  robotImgTx.offYIn = Number(robotImgOffYEl?.value || 0);
-  robotImgTx.rotDeg = Number(robotImgRotEl?.value || 0);
+  const scaleEl = robotImgScaleEl || settingsRobotImgScale;
+  const offXEl = robotImgOffXEl || settingsRobotImgOffX;
+  const offYEl = robotImgOffYEl || settingsRobotImgOffY;
+  const rotEl = robotImgRotEl || settingsRobotImgRot;
+
+  robotImgTx.scale = clamp(Number(scaleEl?.value || 1), 0.05, 20);
+  robotImgTx.offXIn = Number(offXEl?.value || 0);
+  robotImgTx.offYIn = Number(offYEl?.value || 0);
+  robotImgTx.rotDeg = Number(rotEl?.value || 0);
 }
 
 const onRobotImgInput = () => {
@@ -3267,6 +3415,10 @@ if (robotImgScaleEl) robotImgScaleEl.addEventListener('input', onRobotImgInput);
 if (robotImgOffXEl) robotImgOffXEl.addEventListener('input', onRobotImgInput);
 if (robotImgOffYEl) robotImgOffYEl.addEventListener('input', onRobotImgInput);
 if (robotImgRotEl) robotImgRotEl.addEventListener('input', onRobotImgInput);
+if (settingsRobotImgScale) settingsRobotImgScale.addEventListener('input', onRobotImgInput);
+if (settingsRobotImgOffX) settingsRobotImgOffX.addEventListener('input', onRobotImgInput);
+if (settingsRobotImgOffY) settingsRobotImgOffY.addEventListener('input', onRobotImgInput);
+if (settingsRobotImgRot) settingsRobotImgRot.addEventListener('input', onRobotImgInput);
 
 
 settingsMinSpeed.addEventListener('input', () => {
@@ -3403,11 +3555,7 @@ document.addEventListener('keydown', (e) => {
 
 // -------- init --------
 loadFieldOptions();
-try {
-  loadSettings(); // Load saved settings
-} catch (e) {
-  console.error('Error loading settings:', e);
-}
+void loadSettings(); // Load saved settings
 // Ensure modals start hidden
 if (helpModal) {
   helpModal.setAttribute('hidden', '');
@@ -3426,6 +3574,12 @@ setTimeout(() => {
     console.error('Error loading PROS dir:', e);
   }
 }, 500);
+const bridgeReadyPoll = setInterval(() => {
+  if (refreshBridgeOrigin()) {
+    clearInterval(bridgeReadyPoll);
+    loadProsDirFromAPI();
+  }
+}, 250);
 window.addEventListener('resize', () => {
   updateFieldLayout(true); // keep bounds, recompute square sizing
   resizeTimeline();

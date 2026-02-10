@@ -1,10 +1,16 @@
 use std::{
+  io,
   net::TcpListener,
   path::PathBuf,
   process::{Child, Command},
   sync::Mutex,
 };
+
 use tauri::{Manager, RunEvent};
+use tauri::AppHandle;
+use tauri::path::BaseDirectory;
+
+mod settings;
 
 struct BridgeState(Mutex<Option<Child>>);
 
@@ -13,57 +19,74 @@ fn pick_free_port() -> u16 {
   l.local_addr().unwrap().port()
 }
 
-fn venv_python(root: &PathBuf) -> Option<PathBuf> {
-  let p = if cfg!(target_os = "windows") {
-    root.join(".venv").join("Scripts").join("python.exe")
-  } else {
-    root.join(".venv").join("bin").join("python")
-  };
-  p.exists().then_some(p)
+fn resolve_bridge(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
+  let candidates = ["_up_/src/bridge.py", "_up_/bridge.py", "bridge.py", "src/bridge.py"];
+
+  for rel in candidates {
+    let p = app.path().resolve(rel, BaseDirectory::Resource)?;
+    if p.exists() {
+      return Ok(p);
+    }
+  }
+
+  Err(tauri::Error::Io(io::Error::new(
+    io::ErrorKind::NotFound,
+    "bridge.py not found in bundle resources",
+  )))
 }
 
-fn find_project_root() -> PathBuf {
-  let mut dir = std::env::current_dir().expect("current_dir");
-  loop {
-    if dir.join("package.json").exists() && dir.join("pnpm-lock.yaml").exists() {
-      return dir;
-    }
-    if !dir.pop() {
-      panic!("Could not find project root (package.json not found in any parent)");
-    }
+fn project_root(handle: &AppHandle) -> tauri::Result<PathBuf> {
+  #[cfg(debug_assertions)]
+  {
+    // If src-tauri is a subdir, repo root is parent of CARGO_MANIFEST_DIR.
+    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .to_path_buf())
+  }
+
+  #[cfg(not(debug_assertions))]
+  {
+    Ok(handle.path().resource_dir()?)
   }
 }
 
-fn spawn_bridge(root: &PathBuf, port: u16) -> Child {
-  let script = root.join("src").join("bridge.py");
+fn stop_bridge(state: &tauri::State<BridgeState>) {
+  if let Some(mut child) = state.0.lock().unwrap().take() {
+    let _ = child.kill();
+    let _ = child.wait(); // avoid zombie
+  }
+}
 
-  let mut cmd = if let Some(py) = venv_python(root) {
-    Command::new(py)
-  } else if cfg!(target_os = "windows") {
-    let mut c = Command::new("py");
-    c.arg("-3");
-    c
-  } else {
-    Command::new("python3")
-  };
+fn spawn_bridge(app: &tauri::AppHandle, port: u16) -> Result<Child, tauri::Error> {
+  let script = resolve_bridge(app)?;
+  let workdir = script.parent().unwrap().to_path_buf();
 
-  println!("Spawning bridge: {:?} --host 127.0.0.1 --port {}", script, port);
+  let py = ["/usr/bin/python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|p| p.exists())
+    .unwrap_or_else(|| PathBuf::from("python3"));
 
-  cmd.arg(script)
+  Command::new(py)
+    .arg(&script)
     .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-    .current_dir(root.join("src")) // <-- so relative paths in bridge resolve to src/
+    .current_dir(&workdir)
     .spawn()
-    .expect("spawn bridge.py")
+    .map_err(tauri::Error::Io)
 }
 
 fn main() {
   tauri::Builder::default()
     .manage(BridgeState(Mutex::new(None)))
+    .invoke_handler(tauri::generate_handler![
+      settings::read_settings,
+      settings::write_settings,
+      settings::read_image_data
+    ])
     .setup(|app| {
       let port = pick_free_port();
-      let root = find_project_root();
-
-      let child = spawn_bridge(&root, port);
+      let child = spawn_bridge(app.handle(), port)?;
       *app.state::<BridgeState>().0.lock().unwrap() = Some(child);
 
       // Tell frontend where backend is
@@ -81,6 +104,28 @@ fn main() {
         if let Some(mut child) = app_handle.state::<BridgeState>().0.lock().unwrap().take() {
           let _ = child.kill();
         }
+      match event {
+        // Fires when any window is closed/destroyed (covers clicking the red X)
+        RunEvent::WindowEvent { label, event, .. } => {
+          if label == "main" {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+              stop_bridge(&app_handle.state::<BridgeState>());
+            }
+          }
+        }
+
+        // Fires when the app is exiting normally
+        RunEvent::Exit => {
+          stop_bridge(&app_handle.state::<BridgeState>());
+        }
+
+        // Fires on quit requests (Cmd+Q / Dock Quit / menu Quit)
+        RunEvent::ExitRequested { .. } => {
+          stop_bridge(&app_handle.state::<BridgeState>());
+        }
+
+        _ => {}
       }
+    }
     });
 }

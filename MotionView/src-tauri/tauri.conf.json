@@ -22,7 +22,8 @@
   "bundle": {
     "resources": [
       "../src/bridge.py",
-      "../src/assets/"
+      "../src/assets/",
+      "../package.json"
     ],
     "active": true,
     "targets": "all",

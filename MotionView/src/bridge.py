@@ -17,7 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
 # PROS_PROJECT_DIR can be updated via API
-PROS_PROJECT_DIR = Path("/Users/David/Documents/VEXcode Robot/")
+PROS_PROJECT_DIR = None
 # Lock will be created when needed (can't create Lock outside async context)
 PROS_PROJECT_DIR_LOCK = None
 
