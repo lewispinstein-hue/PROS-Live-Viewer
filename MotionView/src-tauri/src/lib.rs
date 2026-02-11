@@ -15,7 +15,9 @@ pub fn run() {
             settings::read_settings,
             settings::write_settings,
             settings::read_image_data,
-            settings::save_robot_image
+            settings::save_robot_image,
+            settings::read_saved_paths,
+            settings::write_saved_paths
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

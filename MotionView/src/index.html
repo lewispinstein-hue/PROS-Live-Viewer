@@ -8,34 +8,42 @@
   <script type="module" src="/main.js" defer></script>
 </head>
 <body>
-<header class="">
+<header id="topBar" class="topBar">
   <input id="file" type="file" accept=".json" style="display:none" />
   <input id="robotImageFile" type="file" accept="image/*" style="display:none" />
-  <button id="btnSettings" class="iconBtn" title="Settings">⚙️</button>
-  <button id="btnFile" class="iconBtn" title="Open JSON">📄</button>
-  <button id="btnPlay" class="iconBtn" title="Play/Pause" disabled>▶</button>
-  <div class="chip">
-    <span class="muted">Speed</span>
-    <select id="speedSelect" title="Playback Speed Changer">
-      <option value="0.25">0.25×</option>
-      <option value="0.5">0.5×</option>
-      <option value="1" selected>1×</option>
-      <option value="2">2×</option>
-      <option value="4">4×</option>
-      <option value="8">8×</option>
-    </select>
+  <div class="topBarLeft">
+    <button id="btnFit" class="iconBtn" title="Maximize field (square)">⤢</button>
+    <button id="btnSettings" class="iconBtn" title="Settings">⚙️</button>
+    <button class="iconBtn pillAction" id="btnClearField" style="font-size: 12px" title="Clear field">❌</button>
+    <button id="btnHelp" class="iconBtn" title="Help">?</button>
+    <span class="topStatus muted" id="status">Drop a viewer JSON file.</span>
   </div>
-  <button id="btnFit" class="iconBtn" title="Maximize field (square)">⤢</button>
-  <button id="btnToggleFloat" class="iconBtn" title="Toggle Info Window">📋</button>
-  <div class="chip">
-    <span class="muted">Field</span>
-    <select id="fieldSelect" title="Field image Selector">
-      <option value="">No field image</option>
-    </select>
+  <div class="topBarCenter">
+    <div class="modeToggle" role="tablist" aria-label="Mode selector">
+      <button id="modeViewing" class="modeBtn isActive" role="tab" aria-selected="true" data-mode="viewing">Viewing</button>
+      <button id="modePlanning" class="modeBtn" role="tab" aria-selected="false" data-mode="planning">Planning</button>
+    </div>
   </div>
-  <button class="iconBtn pillAction" id="btnClearField" style="font-size: 12px" title="Clear field">❌</button>
-  <button id="btnHelp" class="iconBtn" title="Help">?</button>
-  <span class="grow muted" id="status">Drop a viewer JSON file.</span>
+  <div class="topBarRight">
+    <button id="btnPlay" class="iconBtn" title="Play/Pause" disabled>▶</button>
+    <div class="chip">
+      <span class="muted">Speed</span>
+      <select id="speedSelect" title="Playback Speed Changer">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+      </select>
+    </div>
+    <div class="chip">
+      <span class="muted">Field</span>
+      <select id="fieldSelect" title="Field image Selector">
+        <option value="">No field image</option>
+      </select>
+    </div>
+  </div>
 </header>
 
 <div id="helpModal" class="modal" hidden>
@@ -79,7 +87,7 @@
       <button id="btnSettingsClose" class="iconBtn" title="Close">✕</button>
     </div>
     <div class="modalBody">
-      <div style="margin-bottom:20px">
+      <div class="settingsSection settingsViewing" style="margin-bottom:20px">
         <label style="display:block;margin-bottom:6px;font-weight:700">PROS Directory (optional, needed for live viewing)</label>
         <div style="font-size:12px;margin-bottom:8px;color:var(--muted)">Manual: enter a path. Auto: scan common folders for PROS projects.</div>
         <div style="display:flex;gap:8px;align-items:center">
@@ -91,9 +99,9 @@
         <div id="prosDirStatus" class="muted" style="margin-top:6px;font-size:11px">Set the PROS project directory for live viewing functionality</div>
       </div>
 
-      <div class="divider" style="margin:20px 0;"></div>
+      <div class="divider settingsViewing" style="margin:20px 0;"></div>
 
-      <div style="margin-bottom:20px">
+      <div class="settingsSection settingsViewing" style="margin-bottom:20px">
         <div style="font-weight:800;margin-bottom:12px">Robot Image</div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
           <button id="btnUploadRobotImage" class="iconBtn" style="font-size:12px">Upload Image</button>
@@ -124,9 +132,9 @@
         </div>
       </div>
 
-      <div class="divider" style="margin:20px 0;"></div>
+      <div class="divider settingsViewing" style="margin:20px 0;"></div>
 
-      <div style="margin-bottom:20px">
+      <div class="settingsSection settingsViewing" style="margin-bottom:20px">
         <div style="font-weight:800;margin-bottom:12px">Units & Robot Size</div>
         <div class="grid2">
           <div>
@@ -158,9 +166,9 @@
         </div>
       </div>
 
-      <div class="divider" style="margin:20px 0;"></div>
+      <div class="divider settingsViewing" style="margin:20px 0;"></div>
 
-      <div style="margin-bottom:20px">
+      <div class="settingsSection settingsViewing" style="margin-bottom:20px">
         <div style="font-weight:800;margin-bottom:12px">Offsets</div>
         <div class="grid3">
           <div>
@@ -178,9 +186,9 @@
         </div>
       </div>
 
-      <div class="divider" style="margin:20px 0;"></div>
+      <div class="divider settingsViewing" style="margin:20px 0;"></div>
 
-      <div style="margin-bottom:20px">
+      <div class="settingsSection settingsViewing" style="margin-bottom:20px">
         <div style="font-weight:800;margin-bottom:12px">Speed Normalization</div>
         <div class="grid2">
           <div>
@@ -190,6 +198,34 @@
           <div>
             <label>Max speed (normalize)</label>
             <input id="settingsMaxSpeed" type="number" title="Maximum speed used for color normalization (green=fast)" step="1" value="127" />
+          </div>
+        </div>
+      </div>
+
+      <div class="divider settingsPlanning" style="margin:20px 0;"></div>
+
+      <div class="settingsSection settingsPlanning" style="margin-bottom:20px">
+        <div style="font-weight:800;margin-bottom:12px">Planning</div>
+        <div class="grid2">
+          <div>
+            <label>Move selected waypoint (in)</label>
+            <input id="settingsPlanMoveStep" type="number" step="0.1" value="0.5" />
+          </div>
+          <div>
+            <label>Snap to grid (in)</label>
+            <select id="settingsPlanSnapStep">
+              <option value="0">off</option>
+              <option value="0.1">0.1</option>
+              <option value="0.25">0.25</option>
+              <option value="0.5" selected>0.5</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <div>
+            <label>Planning playback speed (0-100)</label>
+            <input id="settingsPlanSpeed" type="number" step="1" min="0" max="100" value="50" />
           </div>
         </div>
       </div>
@@ -285,17 +321,45 @@
     <div id="vSplit" class="splitterV" title="Drag to resize"></div>
 
     <div id="right">
-      <div class="section">
+      <div class="section planningOnly planSelSection">
         <div class="statsPanel">
           <div class="statsHeader">
-            <div class="statsTitle">Stats</div>
-            <div class="statsHint" id="statsMarker">Updates when a path is loaded</div>
+            <div class="statsTitle">Waypoints</div>
+            <div class="statsHint" id="planCount">0</div>
           </div>
-          <div class="kvs" id="stats"></div>
+          <div id="planList" class="planList"></div>
         </div>
       </div>
-
-      <div class="section">
+      <div class="section planningOnly">
+        <div class="statsPanel">
+          <div class="statsHeader">
+            <div class="statsTitle">Selected Waypoint</div>
+            <div class="statsHint" id="planSelIndex">—</div>
+          </div>
+          <div class="grid3" style="margin-top:10px">
+            <div>
+              <label>X</label>
+              <input id="planSelX" type="text" inputmode="decimal" />
+            </div>
+            <div>
+              <label>Y</label>
+              <input id="planSelY" type="text" inputmode="decimal" />
+            </div>
+            <div>
+              <label>θ (deg)</label>
+              <input id="planSelTheta" type="text" inputmode="decimal" />
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="section viewingOnly">
+        <div class="rowline" style="gap:8px;flex-wrap:wrap">
+          <button id="btnFile" class="iconBtn" title="Open JSON">📄</button>
+          <button id="btnToggleFloat" class="iconBtn" title="Toggle Info Window">📋</button>
+          <button id="btnTogglePlanOverlay" class="iconBtn" title="Toggle Planner Path">🧭</button>
+        </div>
+      </div>
+      <div class="section viewingOnly">
         <details open id="secWatches">
           <summary>
             <span>Watches</span>
@@ -321,7 +385,7 @@
       </div>
 
       
-      <div class="section">
+      <div class="section viewingOnly">
         <details open id="secPoses">
           <summary>
             <span>Poses</span>
@@ -358,6 +422,15 @@
     <div id="timelineHint" class="muted">
       Hover: preview robot at time • Click: set time • Watch dots are clickable
     </div>
+  </div>
+
+  <div id="planningTimelineBar">
+    <div id="planningTimelineTop">
+      <span class="pill" id="planTimePill">Plan: —</span>
+      <span class="pill" id="planPointPill">Points: 0</span>
+    </div>
+    <canvas id="planningTimelineCanvas"></canvas>
+    <div id="planningTimelineHint" class="muted">Click or drag to scrub along the planned path</div>
   </div>
 </div>
 <div id="watchPopup" hidden></div>

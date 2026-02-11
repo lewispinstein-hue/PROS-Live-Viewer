@@ -5,6 +5,7 @@ use base64::Engine as _;
 
 const SETTINGS_FILE: &str = "user-preferences.json";
 const ROBOT_IMAGE_FILE_BASE: &str = "robot-image";
+const SAVED_PATHS_FILE: &str = "saved-paths.json";
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -21,6 +22,15 @@ fn legacy_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_config_dir()
         .map_err(|e: tauri::Error| e.to_string())?;
     Ok(dir.join(SETTINGS_FILE))
+}
+
+fn saved_paths_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e: tauri::Error| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(SAVED_PATHS_FILE))
 }
 
 #[tauri::command]
@@ -53,6 +63,24 @@ pub fn read_settings(app: AppHandle) -> Result<Option<String>, String> {
 pub fn write_settings(app: AppHandle, contents: String) -> Result<(), String> {
     serde_json::from_str::<serde_json::Value>(&contents).map_err(|e| e.to_string())?;
     let path = settings_path(&app)?;
+    std::fs::write(path, contents).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_saved_paths(app: AppHandle) -> Result<Option<String>, String> {
+    let path = saved_paths_path(&app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    std::fs::read_to_string(path)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn write_saved_paths(app: AppHandle, contents: String) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(&contents).map_err(|e| e.to_string())?;
+    let path = saved_paths_path(&app)?;
     std::fs::write(path, contents).map_err(|e| e.to_string())
 }
 

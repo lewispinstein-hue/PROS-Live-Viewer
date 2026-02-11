@@ -16,6 +16,11 @@ window.addEventListener('mousemove', (e) => { lastMouseClient = { x: e.clientX, 
 const ctx = canvas.getContext('2d');
 const timelineCanvas = document.getElementById('timelineCanvas');
 const tctx = timelineCanvas.getContext('2d');
+const planningTimelineBar = document.getElementById('planningTimelineBar');
+const planningTimelineCanvas = document.getElementById('planningTimelineCanvas');
+const planTimePill = document.getElementById('planTimePill');
+const planPointPill = document.getElementById('planPointPill');
+const pctx = planningTimelineCanvas ? planningTimelineCanvas.getContext('2d') : null;
 
 const statusEl = document.getElementById('status');
 const fileEl = document.getElementById('file');
@@ -28,6 +33,7 @@ const btnLeftConnect = document.getElementById('btnLeftConnect');
 const btnLeftRefresh = document.getElementById('btnLeftRefresh');
 const leftRefreshInterval = document.getElementById('leftRefreshInterval');
 const liveWin = document.getElementById('liveWin');
+const btnTogglePlanOverlay = document.getElementById('btnTogglePlanOverlay');
 const helpModal = document.getElementById('helpModal');
 const btnHelpClose = document.getElementById('btnHelpClose');
 const speedSelect = document.getElementById('speedSelect');
@@ -49,7 +55,6 @@ const timelineTop = document.getElementById('timelineTop');
 const timelineHint = document.getElementById('timelineHint');
 
 // Removed: runName, runMeta, fmt (were in Config section)
-const statsEl = document.getElementById('stats');
 const watchList = document.getElementById('watchList');
 const watchCount = document.getElementById('watchCount');
 const secWatches = document.getElementById('secWatches');
@@ -76,6 +81,8 @@ const maxSpeedEl = document.getElementById('settingsMaxSpeed');
 const btnSettings = document.getElementById('btnSettings');
 const settingsModal = document.getElementById('settingsModal');
 const btnSettingsClose = document.getElementById('btnSettingsClose');
+const modeViewingBtn = document.getElementById('modeViewing');
+const modePlanningBtn = document.getElementById('modePlanning');
 const prosDirInput = document.getElementById('prosDirInput');
 const btnProsDirAuto = document.getElementById('btnProsDirAuto');
 const btnUploadRobotImage = document.getElementById('btnUploadRobotImage');
@@ -95,6 +102,15 @@ const settingsOffY = document.getElementById('settingsOffY');
 const settingsOffTheta = document.getElementById('settingsOffTheta');
 const settingsMinSpeed = document.getElementById('settingsMinSpeed');
 const settingsMaxSpeed = document.getElementById('settingsMaxSpeed');
+const settingsPlanMoveStep = document.getElementById('settingsPlanMoveStep');
+const settingsPlanSnapStep = document.getElementById('settingsPlanSnapStep');
+const settingsPlanSpeed = document.getElementById('settingsPlanSpeed');
+const planListEl = document.getElementById('planList');
+const planCountEl = document.getElementById('planCount');
+const planSelIndexEl = document.getElementById('planSelIndex');
+const planSelXEl = document.getElementById('planSelX');
+const planSelYEl = document.getElementById('planSelY');
+const planSelThetaEl = document.getElementById('planSelTheta');
 
 const prosDirStatusEl = document.getElementById('prosDirStatus');
 const prosDirAutoStatusEl = document.getElementById('prosDirAutoStatus');
@@ -204,6 +220,408 @@ let panArmed = false;
 let panPointerId = null;
 let panStart = { x: 0, y: 0, panX: 0, panY: 0 };
 let suppressNextClick = false;
+
+let appMode = "viewing";
+
+// -------- planning --------
+let planWaypoints = []; // {x,y} in inches
+let planSelected = -1;
+let planDragging = false;
+let planPointerId = null;
+let planDragOffset = { x: 0, y: 0 };
+let planSelectedSet = new Set();
+let planDragStart = { x: 0, y: 0 };
+let planDragOrig = [];
+let planSelecting = false;
+let planSelectRect = null; // {x0,y0,x1,y1} in screen px
+let planPlaying = false;
+let planRaf = null;
+let planPlayDist = 0;
+let planLastWall = null;
+const PLAN_SPEED = 1; // units per second
+let planScrubbing = false;
+let planOverlayVisible = false;
+let savedPathsSaveTimer = null;
+
+function getPlanMoveStepIn() {
+  const v = Number(settingsPlanMoveStep?.value || 0.5);
+  return (isFinite(v) && v > 0) ? v : 0.5;
+}
+
+function getPlanSnapStepIn() {
+  const v = Number(settingsPlanSnapStep?.value || 0);
+  return (isFinite(v) && v > 0) ? v : 0;
+}
+
+function getPlanSpeedUnitsPerSec() {
+  const pct = clamp(Number(settingsPlanSpeed?.value || 0), 0, 100);
+  const { maxV } = getMinMaxSpeed();
+  return (maxV || 0) * (pct / 100);
+}
+
+function applyPlanSnap(v) {
+  const step = getPlanSnapStepIn();
+  if (!step) return v;
+  return Math.round(v / step) * step;
+}
+
+function planSetSelection(indices) {
+  planSelectedSet = new Set(indices);
+  planSelected = indices.length ? indices[0] : -1;
+}
+
+function planSelectSingle(idx) {
+  if (idx < 0) {
+    planSetSelection([]);
+    return;
+  }
+  planSetSelection([idx]);
+}
+
+function planRectSelect() {
+  if (!planSelectRect) return;
+  const x0 = Math.min(planSelectRect.x0, planSelectRect.x1);
+  const x1 = Math.max(planSelectRect.x0, planSelectRect.x1);
+  const y0 = Math.min(planSelectRect.y0, planSelectRect.y1);
+  const y1 = Math.max(planSelectRect.y0, planSelectRect.y1);
+  const picked = [];
+  for (let i = 0; i < planWaypoints.length; i++) {
+    const p = planWaypoints[i];
+    const sp = worldToScreen(p.x, p.y);
+    if (sp.x >= x0 && sp.x <= x1 && sp.y >= y0 && sp.y <= y1) {
+      picked.push(i);
+    }
+  }
+  planSetSelection(picked);
+}
+
+function planThetaDegAt(i) {
+  if (i < 0 || i >= planWaypoints.length) return 0;
+  const cur = planWaypoints[i];
+  const theta = (typeof cur.theta === "number") ? cur.theta : 0;
+  return normalizeDeg(theta + fieldRotationDeg);
+}
+
+function planTotalLength() {
+  let total = 0;
+  for (let i = 0; i < planWaypoints.length - 1; i++) {
+    const a = planWaypoints[i], b = planWaypoints[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    total += Math.hypot(dx, dy);
+  }
+  return total;
+}
+
+function planDistFromX(x) {
+  if (!planningTimelineCanvas) return 0;
+  const rect = planningTimelineCanvas.getBoundingClientRect();
+  const W = rect.width || 1;
+  const total = planTotalLength();
+  const t = clamp((x - 6) / (W - 12), 0, 1);
+  return total * t;
+}
+
+function planSampleAtDist(d) {
+  if (planWaypoints.length === 0) return null;
+  if (planWaypoints.length === 1) {
+    const p = planWaypoints[0];
+    return { x: p.x, y: p.y, theta: 0 };
+  }
+  let rem = d;
+  for (let i = 0; i < planWaypoints.length - 1; i++) {
+    const a = planWaypoints[i], b = planWaypoints[i + 1];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (seg <= 0.0001) continue;
+    if (rem <= seg) {
+      const t = clamp(rem / seg, 0, 1);
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      const theta0 = planThetaDegAt(i);
+      const theta1 = planThetaDegAt(i + 1);
+      const theta = angLerpDeg(theta0, theta1, t);
+      return { x, y, theta };
+    }
+    rem -= seg;
+  }
+  const last = planWaypoints[planWaypoints.length - 1];
+  return { x: last.x, y: last.y, theta: planThetaDegAt(planWaypoints.length - 2) };
+}
+
+function setPlanDist(d) {
+  const total = planTotalLength();
+  planPlayDist = clamp(d, 0, total);
+  if (planTimePill) {
+    planTimePill.textContent = `Plan: ${fmtNum(planPlayDist, 2)} / ${fmtNum(total, 2)} in`;
+  }
+  if (planPointPill) {
+    planPointPill.textContent = `Points: ${planWaypoints.length}`;
+  }
+  drawPlanningTimeline();
+  requestDrawAll();
+}
+
+function updatePlanControls() {
+  if (!btnPlay) return;
+  if (appMode === "planning") {
+    btnPlay.disabled = planWaypoints.length < 2;
+  } else {
+    btnPlay.disabled = rawPoses.length < 2;
+  }
+}
+
+function renderPlanList() {
+  if (!planListEl) return;
+  planListEl.innerHTML = '';
+  if (planCountEl) planCountEl.textContent = `${planWaypoints.length}`;
+  for (let i = 0; i < planWaypoints.length; i++) {
+    const p = planWaypoints[i];
+    const item = document.createElement('div');
+    item.className = 'planItem' + (planSelectedSet.has(i) ? ' selected' : '');
+    item.dataset.idx = String(i);
+    const theta = planThetaDegAt(i);
+    item.innerHTML = `
+      <div class="muted">#${i + 1}</div>
+      <div>X: ${fmtNum(p.x, 2)}  Y: ${fmtNum(p.y, 2)}  θ: ${fmtNum(theta, 1)}°</div>
+    `;
+    item.addEventListener('click', () => {
+      planSelectSingle(i);
+      requestDrawAll();
+      renderPlanList();
+      updatePlanSelectionPanel();
+    });
+    planListEl.appendChild(item);
+  }
+}
+
+function centerOnWorld(x, y) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const sp = worldToScreen(x, y);
+  viewPanXpx += cx - sp.x;
+  viewPanYpx += cy - sp.y;
+  computeTransform();
+}
+
+function planChanged(opts = {}) {
+  renderPlanList();
+  updatePlanControls();
+  setPlanDist(planPlayDist);
+  if (!opts.skipSelectionPanel) updatePlanSelectionPanel();
+  scheduleSavedPathsSave();
+}
+
+async function loadSavedPaths() {
+  if (!invoke) return;
+  try {
+    const saved = await invoke('read_saved_paths');
+    if (!saved) return;
+    const obj = JSON.parse(saved);
+    if (Array.isArray(obj?.["planned-path"])) {
+      planWaypoints = obj["planned-path"].map((p) => ({
+        x: Number(p.x) || 0,
+        y: Number(p.y) || 0,
+        theta: Number(p.theta) || 0,
+      }));
+      planSetSelection([]);
+      planPlayDist = 0;
+      planChanged();
+    }
+    if (Array.isArray(obj?.["robot-path"])) {
+      const poses = obj["robot-path"]
+        .map((p) => ({
+          t: (typeof p.t === "number") ? p.t : (toNumMaybe(p.t) ?? null),
+          x: p.x, y: p.y,
+          theta: (typeof p.theta === "number") ? p.theta : (toNumMaybe(p.theta) ?? 0),
+          l_vel: (typeof p.l_vel === "number") ? p.l_vel : (toNumMaybe(p.l_vel) ?? null),
+          r_vel: (typeof p.r_vel === "number") ? p.r_vel : (toNumMaybe(p.r_vel) ?? null),
+          speed_raw: (typeof p.speed_raw === "number") ? p.speed_raw : (toNumMaybe(p.speed_raw) ?? 0),
+          speed_norm: 0,
+        }))
+        .filter(p => typeof p.x === "number" && typeof p.y === "number");
+      if (poses.length) {
+        rawPoses = poses.sort((a,b) => (a.t ?? 0) - (b.t ?? 0));
+        data = { poses: rawPoses, watches: [], meta: {} };
+        computeSpeedNorm();
+        syncMainToSettings();
+        try { renderPoseList?.(); } catch {}
+        try { renderWatchList?.(); } catch {}
+        updateFieldLayout(true);
+        updatePoseReadout();
+        requestDrawAll();
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load saved paths:', e);
+  }
+}
+
+function scheduleSavedPathsSave() {
+  if (!invoke) return;
+  if (savedPathsSaveTimer) clearTimeout(savedPathsSaveTimer);
+  savedPathsSaveTimer = setTimeout(async () => {
+    try {
+      const payload = JSON.stringify({
+        "planned-path": planWaypoints.map((p) => ({ x: p.x, y: p.y, theta: p.theta ?? 0 })),
+        "robot-path": rawPoses.map((p) => ({
+          t: p.t ?? null,
+          x: p.x, y: p.y,
+          theta: p.theta ?? 0,
+          l_vel: p.l_vel ?? null,
+          r_vel: p.r_vel ?? null,
+          speed_raw: p.speed_raw ?? 0,
+        })),
+      });
+      await invoke('write_saved_paths', { contents: payload });
+    } catch (e) {
+      console.warn('Failed to save paths:', e);
+    }
+  }, 300);
+}
+
+function updatePlanSelectionPanel() {
+  if (!planSelXEl || !planSelYEl || !planSelThetaEl || !planSelIndexEl) return;
+  const active = document.activeElement;
+  if (planSelected < 0 || planSelected >= planWaypoints.length) {
+    planSelIndexEl.textContent = "—";
+    planSelXEl.value = "";
+    planSelYEl.value = "";
+    planSelThetaEl.value = "";
+    planSelXEl.disabled = true;
+    planSelYEl.disabled = true;
+    planSelThetaEl.disabled = true;
+    return;
+  }
+  const p = planWaypoints[planSelected];
+  planSelIndexEl.textContent = `#${planSelected + 1}`;
+  planSelXEl.disabled = false;
+  planSelYEl.disabled = false;
+  planSelThetaEl.disabled = false;
+  if (active === planSelXEl || active === planSelYEl || active === planSelThetaEl) {
+    return;
+  }
+  const xVal = String(fmtNum(p.x, 2));
+  const yVal = String(fmtNum(p.y, 2));
+  const tVal = String(fmtNum(p.theta ?? 0, 1));
+  planSelXEl.value = xVal;
+  planSelYEl.value = yVal;
+  planSelThetaEl.value = tVal;
+  planSelXEl.dataset.lastValid = xVal;
+  planSelYEl.dataset.lastValid = yVal;
+  planSelThetaEl.dataset.lastValid = tVal;
+}
+
+function planHitTest(mx, my) {
+  let best = { idx: -1, dist2: Infinity };
+  for (let i = 0; i < planWaypoints.length; i++) {
+    const p = planWaypoints[i];
+    const sp = worldToScreen(p.x, p.y);
+    const dx = sp.x - mx;
+    const dy = sp.y - my;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < best.dist2) best = { idx: i, dist2: d2 };
+  }
+  const HIT_PX = 12;
+  return (best.idx >= 0 && best.dist2 <= HIT_PX * HIT_PX) ? best.idx : -1;
+}
+
+function isInField(w) {
+  const pad = bounds?.pad ?? 0;
+  return (
+    w.x >= bounds.minX - pad &&
+    w.x <= bounds.maxX + pad &&
+    w.y >= bounds.minY - pad &&
+    w.y <= bounds.maxY + pad
+  );
+}
+
+function drawPlanningOverlay(force = false) {
+  if (!force && appMode !== "planning") return;
+  if (appMode !== "planning" && !planOverlayVisible) return;
+  if (!planWaypoints.length) return;
+
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(120,180,255,0.7)";
+  ctx.fillStyle = "rgba(120,180,255,0.9)";
+
+  // lines
+  ctx.beginPath();
+  for (let i = 0; i < planWaypoints.length; i++) {
+    const p = planWaypoints[i];
+    const sp = worldToScreen(p.x, p.y);
+    if (i === 0) ctx.moveTo(sp.x, sp.y);
+    else ctx.lineTo(sp.x, sp.y);
+  }
+  ctx.stroke();
+
+  // points
+  for (let i = 0; i < planWaypoints.length; i++) {
+    const p = planWaypoints[i];
+    const sp = worldToScreen(p.x, p.y);
+    const isSel = planSelectedSet.has(i);
+    const r = (i === planSelected) ? 8 : 8;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = (i === planSelected) ? "rgba(180,220,255,1)" : (isSel ? "rgba(150,200,255,0.95)" : "rgba(120,180,255,0.9)");
+    ctx.fill();
+    ctx.strokeStyle = "rgba(15,25,35,0.8)";
+    ctx.stroke();
+
+    // heading line (black) from center to edge
+    const theta = planThetaDegAt(i) * Math.PI / 180;
+    const len = r;
+    ctx.save();
+    ctx.translate(sp.x, sp.y);
+    ctx.rotate(theta);
+    ctx.strokeStyle = "rgba(0,0,0,0.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -len);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (planSelecting && planSelectRect) {
+    const x0 = Math.min(planSelectRect.x0, planSelectRect.x1);
+    const x1 = Math.max(planSelectRect.x0, planSelectRect.x1);
+    const y0 = Math.min(planSelectRect.y0, planSelectRect.y1);
+    const y1 = Math.max(planSelectRect.y0, planSelectRect.y1);
+    ctx.strokeStyle = "rgba(140,200,255,0.8)";
+    ctx.fillStyle = "rgba(140,200,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(x0, y0, x1 - x0, y1 - y0);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function setMode(mode) {
+  appMode = (mode === "planning") ? "planning" : "viewing";
+  document.body.classList.toggle("mode-planning", appMode === "planning");
+  if (appMode === "planning" && playing) pause();
+  if (appMode === "viewing" && planPlaying) planPause();
+  if (modeViewingBtn) {
+    const active = appMode === "viewing";
+    modeViewingBtn.classList.toggle("isActive", active);
+    modeViewingBtn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  if (modePlanningBtn) {
+    const active = appMode === "planning";
+    modePlanningBtn.classList.toggle("isActive", active);
+    modePlanningBtn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  updateFieldLayout(true);
+  resizeTimeline();
+  resizePlanningTimeline();
+  renderPlanList();
+  updatePlanControls();
+  setPlanDist(planPlayDist);
+}
 
 
 // offsets: entered in selected units, stored as inches for rendering
@@ -483,6 +901,16 @@ function resizeTimeline() {
   timelineCanvas.height = Math.max(1, Math.floor(rect.height * dpr));
   tctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawTimeline();
+}
+
+function resizePlanningTimeline() {
+  if (!planningTimelineCanvas || !pctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = planningTimelineCanvas.getBoundingClientRect();
+  planningTimelineCanvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  planningTimelineCanvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawPlanningTimeline();
 }
 
 // -------- field images --------
@@ -914,6 +1342,7 @@ function requestDrawAll() {
     drawQueued = false;
     draw();
     drawTimeline();
+    drawPlanningTimeline();
   });
 }
 
@@ -1139,11 +1568,17 @@ function currentDisplayPose() {
 function draw() {
   drawField();
   drawAxes();
-  drawPath();
-  drawWatchDots();
-
-  const p = currentDisplayPose();
-  if (p) drawRobot(p, 1.0);
+  if (appMode === "viewing") {
+    drawPath();
+    drawWatchDots();
+    if (planOverlayVisible) drawPlanningOverlay(true);
+    const p = currentDisplayPose();
+    if (p) drawRobot(p, 1.0);
+  } else {
+    drawPlanningOverlay();
+    const pose = planSampleAtDist(planPlayDist);
+    if (pose) drawRobot(pose, 1.0);
+  }
 }
 
   // -------- timeline --------
@@ -1308,6 +1743,48 @@ function drawTimeline() {
     tctx.arc(x, y, 9.0, 0, Math.PI*2);
     tctx.stroke();
     tctx.restore();
+  }
+}
+
+function drawPlanningTimeline() {
+  if (!planningTimelineCanvas || !pctx) return;
+  if (appMode !== "planning") return;
+  const rect = planningTimelineCanvas.getBoundingClientRect();
+  const W = rect.width, H = rect.height;
+  pctx.clearRect(0, 0, W, H);
+  pctx.fillStyle = "rgba(16,23,32,0.55)";
+  pctx.fillRect(0, 0, W, H);
+
+  const total = planTotalLength();
+  if (total <= 0) return;
+
+  const y = H / 2;
+  pctx.strokeStyle = "rgba(255,255,255,0.12)";
+  pctx.lineWidth = 2;
+  pctx.beginPath();
+  pctx.moveTo(6, y);
+  pctx.lineTo(W - 6, y);
+  pctx.stroke();
+
+  const progX = 6 + (W - 12) * clamp(planPlayDist / total, 0, 1);
+  pctx.strokeStyle = "rgba(120,180,255,0.9)";
+  pctx.beginPath();
+  pctx.moveTo(6, y);
+  pctx.lineTo(progX, y);
+  pctx.stroke();
+
+  // markers at waypoints
+  let acc = 0;
+  pctx.fillStyle = "rgba(180,220,255,0.9)";
+  for (let i = 0; i < planWaypoints.length; i++) {
+    if (i > 0) {
+      const a = planWaypoints[i - 1], b = planWaypoints[i];
+      acc += Math.hypot(b.x - a.x, b.y - a.y);
+    }
+    const x = 6 + (W - 12) * (total ? acc / total : 0);
+    pctx.beginPath();
+    pctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    pctx.fill();
   }
 }
 
@@ -1622,6 +2099,55 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive:false });
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (appMode === "planning") {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    if (e.button === 2) {
+      // right-drag to select multiple waypoints
+      planSelecting = true;
+      planSelectRect = { x0: mx, y0: my, x1: mx, y1: my };
+      planPointerId = e.pointerId;
+      canvas.setPointerCapture(e.pointerId);
+      requestDrawAll();
+      return;
+    }
+    if (e.button !== 0) return;
+    const hit = planHitTest(mx, my);
+    const w = screenToWorld(mx, my);
+    if (!isInField(w)) {
+      // allow panning when clicking outside the field
+      panArmed = true;
+      isPanning = false;
+      suppressNextClick = false;
+      panPointerId = e.pointerId;
+      panStart.x = mx;
+      panStart.y = my;
+      panStart.panX = viewPanXpx;
+      panStart.panY = viewPanYpx;
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (hit >= 0) {
+      if (!planSelectedSet.has(hit)) {
+        planSelectSingle(hit);
+        planChanged();
+      }
+    } else {
+      planWaypoints.push({ x: applyPlanSnap(w.x), y: applyPlanSnap(w.y), theta: 0 });
+      planSelectSingle(planWaypoints.length - 1);
+      planChanged();
+    }
+    planDragging = true;
+    planPointerId = e.pointerId;
+    planDragStart.x = w.x;
+    planDragStart.y = w.y;
+    planDragOrig = Array.from(planSelectedSet).map((i) => ({ i, x: planWaypoints[i].x, y: planWaypoints[i].y }));
+    canvas.setPointerCapture(e.pointerId);
+    requestDrawAll();
+    return;
+  }
+
   if (e.button !== 0) return; // left only
 
   // Arm panning on any press. If this turns into a drag, we pan the view.
@@ -1641,6 +2167,35 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
+  if (appMode === "planning") {
+    if (planSelecting && planPointerId === e.pointerId && planSelectRect) {
+      const rect = canvas.getBoundingClientRect();
+      planSelectRect.x1 = e.clientX - rect.left;
+      planSelectRect.y1 = e.clientY - rect.top;
+      renderPlanList();
+      updatePlanSelectionPanel();
+      requestDrawAll();
+      return;
+    }
+    if (planDragging && planPointerId === e.pointerId) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const w = screenToWorld(mx, my);
+      const dx = w.x - planDragStart.x;
+      const dy = w.y - planDragStart.y;
+      for (const p of planDragOrig) {
+        const nx = p.x + dx;
+        const ny = p.y + dy;
+        planWaypoints[p.i].x = applyPlanSnap(nx);
+        planWaypoints[p.i].y = applyPlanSnap(ny);
+      }
+      renderPlanList();
+      updatePlanSelectionPanel();
+      requestDrawAll();
+      return;
+    }
+  }
   if (!panArmed) return;
 
   const rect = canvas.getBoundingClientRect();
@@ -1672,6 +2227,25 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 function endPan(e) {
+  if (appMode === "planning") {
+    if (planSelecting && (planPointerId === e.pointerId || planPointerId == null)) {
+      planSelecting = false;
+      planRectSelect();
+      planChanged();
+      planSelectRect = null;
+      try { canvas.releasePointerCapture(planPointerId ?? e.pointerId); } catch {}
+      planPointerId = null;
+      requestDrawAll();
+      return;
+    }
+    if (planDragging && (planPointerId === e.pointerId || planPointerId == null)) {
+      planDragging = false;
+      try { canvas.releasePointerCapture(planPointerId ?? e.pointerId); } catch {}
+      planPointerId = null;
+      planChanged();
+      return;
+    }
+  }
   if (!panArmed) return;
   panArmed = false;
   isPanning = false;
@@ -1682,6 +2256,9 @@ function endPan(e) {
 
 canvas.addEventListener('pointerup', endPan);
 canvas.addEventListener('pointercancel', endPan);
+canvas.addEventListener('contextmenu', (e) => {
+  if (appMode === "planning") e.preventDefault();
+});
 
 // -------- track hover/lock --------
 function pickTrackPose(clientX, clientY) {
@@ -1789,6 +2366,14 @@ function pause() {
   setStatus(`Paused at time ${((rawPoses[selectedIndex]?.t ?? 0)/1000).toFixed(2)}s`);
 }
 
+function planPause() {
+  planPlaying = false;
+  btnPlay.textContent = "▶";
+  if (planRaf) cancelAnimationFrame(planRaf);
+  planRaf = null;
+  planLastWall = null;
+}
+
 function play() {
   if (!rawPoses.length) return;
   if (window.__live && window.__live.streaming) { setStatus('Playback disabled while livestreaming.'); return; }
@@ -1811,20 +2396,8 @@ function play() {
     if (!playing) return;
     const dtWall = now - lastWall;
     lastWall = now;
-    // Make playback speed match the heat color scale (slow=red, fast=green),
-    // including when the user adjusts Min/Max speed normalization.
-    const cur = interpolatePoseAtTime(playTimeMs) || rawPoses[selectedIndex] || null;
-    let n = null;
-    if (cur && typeof cur.speed_raw === "number") {
-      n = normFromSpeedRaw(cur.speed_raw);
-    } else if (cur && typeof cur.speed_norm === "number") {
-      n = cur.speed_norm;
-    }
-    if (n == null) n = 0.5;
-    const SPEED_SLOW = 0.25; // red end
-    const SPEED_FAST = 2.00; // green end
-    const speedMul = SPEED_SLOW + (SPEED_FAST - SPEED_SLOW) * clamp(n, 0, 1);
-    playTimeMs += dtWall * playRate * speedMul;
+    // Constant-time playback (1x base, scaled only by playRate)
+    playTimeMs += dtWall * playRate;
 
     const tMin = rawPoses[0]?.t ?? 0;
     const tMax = rawPoses[rawPoses.length - 1]?.t ?? tMin;
@@ -1857,6 +2430,29 @@ function play() {
   };
 
   raf = requestAnimationFrame(tick);
+}
+
+function planPlay() {
+  if (planWaypoints.length < 2) return;
+  planPlaying = true;
+  btnPlay.textContent = "⏸";
+  planLastWall = performance.now();
+  const tick = (now) => {
+    if (!planPlaying) return;
+    const dtWall = (now - planLastWall) / 1000;
+    planLastWall = now;
+    const total = planTotalLength();
+    const planSpeed = getPlanSpeedUnitsPerSec();
+    planPlayDist += dtWall * planSpeed * playRate;
+    if (planPlayDist >= total) {
+      planPlayDist = total;
+      planPause();
+    } else {
+      planRaf = requestAnimationFrame(tick);
+    }
+    setPlanDist(planPlayDist);
+  };
+  planRaf = requestAnimationFrame(tick);
 }
 
 // -------- timeline interactions --------
@@ -1935,8 +2531,35 @@ timelineCanvas.addEventListener("mousedown", (e) => {
   requestDrawAll();
 });
 
+if (planningTimelineCanvas) {
+  const onPlanScrub = (e) => {
+    const rect = planningTimelineCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    setPlanDist(planDistFromX(x));
+  };
+  planningTimelineCanvas.addEventListener("pointerdown", (e) => {
+    if (appMode !== "planning") return;
+    planScrubbing = true;
+    planningTimelineCanvas.setPointerCapture(e.pointerId);
+    onPlanScrub(e);
+  });
+  planningTimelineCanvas.addEventListener("pointermove", (e) => {
+    if (!planScrubbing) return;
+    onPlanScrub(e);
+  });
+  planningTimelineCanvas.addEventListener("pointerup", (e) => {
+    if (!planScrubbing) return;
+    planScrubbing = false;
+    try { planningTimelineCanvas.releasePointerCapture(e.pointerId); } catch {}
+  });
+  planningTimelineCanvas.addEventListener("pointercancel", () => {
+    planScrubbing = false;
+  });
+}
+
 // -------- field interactions --------
 canvas.addEventListener('mousemove', (e) => {
+  if (appMode === "planning") return;
   if (!data || playing || isPanning) return;
 
   // watch hover has priority
@@ -1980,6 +2603,7 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 canvas.addEventListener('mouseleave', () => {
+  if (appMode === "planning") return;
   hoverWatch = null;
   // ensure timeline hover preview can't 'stick'
   hoverTimelineTime = null;
@@ -1994,6 +2618,7 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 canvas.addEventListener('click', (e) => {
+  if (appMode === "planning") return;
   if (!data || playing) return;
   if (window.__live && window.__live.streaming) return;
   if (suppressNextClick) { suppressNextClick = false; return; }
@@ -2425,6 +3050,7 @@ async function doLeftRefresh() {
 
   updatePoseReadout();
   requestDrawAll();
+  scheduleSavedPathsSave();
 }
 
 
@@ -2742,6 +3368,7 @@ function setData(obj) {
   updateOffsetsFromInputs();
 
   computeSpeedNorm();
+  scheduleSavedPathsSave();
 
   // Sync to settings modal and save
   syncMainToSettings();
@@ -2762,27 +3389,6 @@ function setData(obj) {
   renderWatchList();
   renderPoseList();
 
-  // stats
-  const statsHint = document.getElementById('statsMarker');
-  const th = obj.thinning || {};
-  const t0 = rawPoses[0]?.t;
-  const tN = rawPoses[rawPoses.length-1]?.t;
-  const rows = [
-    ["Poses in file", rawPoses.length],
-    ["Watches in file", watches.length],
-    ["Watches mapped on path", watchMarkers.length],
-    ["Points kept from file", th.kept ?? "—"],
-    ["Points removed from file", th.removed ?? "—"],
-    ["Thinning ms", th.viewer_thin_ms ?? "—"],
-    ["Time range", (typeof t0==="number" && typeof tN==="number") ? `${(t0 / 1000).toFixed(1)} — ${(tN / 1000).toFixed(1)}s` : "—"],
-  ];
-  statsEl.innerHTML = "";
-  for (const [k, v] of rows) {
-    const a = document.createElement("div"); a.textContent = k;
-    const b = document.createElement("div"); b.textContent = String(v);
-    statsEl.appendChild(a); statsEl.appendChild(b);
-  }
-  statsHint.textContent = ``;
   bounds = { ...FIELD_BOUNDS_IN };
   computeTransform();
 
@@ -2911,6 +3517,15 @@ async function loadSettings() {
         if (maxSpeedEl) maxSpeedEl.value = settings.maxSpeed;
         if (settingsMaxSpeed) settingsMaxSpeed.value = settings.maxSpeed;
       }
+      if (settings.planMoveStep !== undefined && settingsPlanMoveStep) {
+        settingsPlanMoveStep.value = settings.planMoveStep;
+      }
+      if (settings.planSnapStep !== undefined && settingsPlanSnapStep) {
+        settingsPlanSnapStep.value = settings.planSnapStep;
+      }
+      if (settings.planSpeed !== undefined && settingsPlanSpeed) {
+        settingsPlanSpeed.value = settings.planSpeed;
+      }
       if (settings.robotImgScale !== undefined) {
         robotImgTx.scale = settings.robotImgScale;
         if (robotImgScaleEl) robotImgScaleEl.value = settings.robotImgScale;
@@ -2977,6 +3592,9 @@ async function saveSettings() {
       offTheta: offThetaEl ? offThetaEl.value : '0',
       minSpeed: minSpeedEl ? minSpeedEl.value : '0',
       maxSpeed: maxSpeedEl ? maxSpeedEl.value : '127',
+      planMoveStep: settingsPlanMoveStep ? settingsPlanMoveStep.value : '0.5',
+      planSnapStep: settingsPlanSnapStep ? settingsPlanSnapStep.value : '0',
+      planSpeed: settingsPlanSpeed ? settingsPlanSpeed.value : '50',
       robotImgScale: robotImgTx.scale,
       robotImgOffX: robotImgTx.offXIn,
       robotImgOffY: robotImgTx.offYIn,
@@ -3181,6 +3799,13 @@ if (settingsModal) {
   console.warn('settingsModal element not found');
 }
 
+if (modeViewingBtn) {
+  modeViewingBtn.addEventListener('click', () => setMode('viewing'));
+}
+if (modePlanningBtn) {
+  modePlanningBtn.addEventListener('click', () => setMode('planning'));
+}
+
 // Global Escape handler: close modals and prevent window-level behavior
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
@@ -3236,6 +3861,21 @@ if (settingsMinSpeed) {
 }
 if (settingsMaxSpeed) {
   settingsMaxSpeed.addEventListener('input', () => {
+    syncSettingsToMain();
+  });
+}
+if (settingsPlanMoveStep) {
+  settingsPlanMoveStep.addEventListener('input', () => {
+    syncSettingsToMain();
+  });
+}
+if (settingsPlanSnapStep) {
+  settingsPlanSnapStep.addEventListener('change', () => {
+    syncSettingsToMain();
+  });
+}
+if (settingsPlanSpeed) {
+  settingsPlanSpeed.addEventListener('input', () => {
     syncSettingsToMain();
   });
 }
@@ -3524,17 +4164,31 @@ document.addEventListener('drop', (e) => {
 });
 
 btnPlay.addEventListener('click', () => {
+  if (appMode === "planning") {
+    if (planPlaying) planPause();
+    else planPlay();
+    requestDrawAll();
+    return;
+  }
   if (!data) return;
   if (playing) { pause(); updatePoseReadout(); requestDrawAll(); }
   else play();
 });
+
+if (btnTogglePlanOverlay) {
+  btnTogglePlanOverlay.addEventListener('click', () => {
+    planOverlayVisible = !planOverlayVisible;
+    btnTogglePlanOverlay.classList.toggle('isOn', planOverlayVisible);
+    requestDrawAll();
+  });
+  btnTogglePlanOverlay.classList.toggle('isOn', planOverlayVisible);
+}
 
 speedSelect.addEventListener('change', () => {
   playRate = Number(speedSelect.value) || 1;
 });
 
 btnFit.addEventListener('click', () => resetFieldPosition());
-
 if (fieldSelect) {
   fieldSelect.addEventListener('change', (e) => loadFieldImage(e.target.value));
 }
@@ -3611,6 +4265,95 @@ settingsMaxSpeed.addEventListener('input', () => {
   saveSettings();
 });
 
+if (settingsPlanMoveStep) {
+  settingsPlanMoveStep.addEventListener('input', () => {
+    saveSettings();
+  });
+}
+if (settingsPlanSnapStep) {
+  settingsPlanSnapStep.addEventListener('change', () => {
+    saveSettings();
+  });
+}
+if (settingsPlanSpeed) {
+  settingsPlanSpeed.addEventListener('input', () => {
+    saveSettings();
+  });
+}
+
+function bindPlanField(el, getter, setter) {
+  if (!el) return;
+  el.addEventListener('focus', () => {
+    // capture last known good value before edits
+    el.dataset.lastValid = el.dataset.lastValid ?? String(getter());
+  });
+  el.addEventListener('input', () => {
+    if (planSelected < 0 || planSelected >= planWaypoints.length) return;
+    if (el.value.trim() === "") return; // allow clearing while typing
+    const v = Number(el.value);
+    if (!isFinite(v)) return;
+    setter(v);
+    planChanged({ skipSelectionPanel: true });
+    requestDrawAll();
+  });
+  el.addEventListener('blur', () => {
+    if (planSelected < 0 || planSelected >= planWaypoints.length) return;
+    const v = Number(el.value);
+    if (!isFinite(v) || el.value.trim() === "") {
+      const last = el.dataset.lastValid ?? String(getter());
+      el.value = last;
+      return;
+    }
+    // normalize display on blur
+    el.value = String(getter());
+    el.dataset.lastValid = el.value;
+  });
+}
+
+function clampDigits(el, maxDigits) {
+  const s = el.value;
+  const parts = s.split(".");
+  const intPart = parts[0].replace(/[^0-9-]/g, "");
+  const fracPart = parts[1] ? parts[1].replace(/[^0-9]/g, "") : "";
+  const trimmedInt = intPart.replace(/(?!^)-/g, "").slice(0, maxDigits + (intPart.startsWith("-") ? 1 : 0));
+  el.value = fracPart.length ? `${trimmedInt}.${fracPart}` : trimmedInt;
+}
+
+bindPlanField(
+  planSelXEl,
+  () => fmtNum(planWaypoints[planSelected]?.x ?? 0, 2),
+  (v) => { planWaypoints[planSelected].x = applyPlanSnap(v); }
+);
+bindPlanField(
+  planSelYEl,
+  () => fmtNum(planWaypoints[planSelected]?.y ?? 0, 2),
+  (v) => { planWaypoints[planSelected].y = applyPlanSnap(v); }
+);
+bindPlanField(
+  planSelThetaEl,
+  () => fmtNum(planWaypoints[planSelected]?.theta ?? 0, 1),
+  (v) => { planWaypoints[planSelected].theta = normalizeDeg(v); }
+);
+
+if (planSelXEl) {
+  planSelXEl.addEventListener('input', () => clampDigits(planSelXEl, 2));
+}
+if (planSelYEl) {
+  planSelYEl.addEventListener('input', () => clampDigits(planSelYEl, 2));
+}
+if (planSelThetaEl) {
+  planSelThetaEl.addEventListener('input', () => clampDigits(planSelThetaEl, 3));
+  planSelThetaEl.addEventListener('blur', () => {
+    if (planSelected < 0 || planSelected >= planWaypoints.length) return;
+    const v = Number(planSelThetaEl.value);
+    if (isFinite(v)) {
+      planWaypoints[planSelected].theta = normalizeDeg(v);
+      updatePlanSelectionPanel();
+      requestDrawAll();
+    }
+  });
+}
+
 offXEl.addEventListener('input', () => {
   updateOffsetsFromInputs();
   syncMainToSettings();
@@ -3674,7 +4417,153 @@ btnLeftClear?.addEventListener('click', () => {
   liveWinEl.value = "";
 });
 
+btnClearField?.addEventListener('click', () => {
+  if (appMode === "planning") {
+    planWaypoints = [];
+    planSetSelection([]);
+    planPlayDist = 0;
+    planPause();
+    planChanged();
+    requestDrawAll();
+  } else {
+    clearAllPosesAndWatches();
+    liveWinEl.value = "";
+  }
+});
+
 document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    if (e.key === '1') {
+      e.preventDefault();
+      setMode('viewing');
+      return;
+    }
+    if (e.key === '2') {
+      e.preventDefault();
+      setMode('planning');
+      return;
+    }
+  }
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    // Clear everything across modes
+    clearAllPosesAndWatches();
+    liveWinEl.value = "";
+    planWaypoints = [];
+    planSetSelection([]);
+    planPlayDist = 0;
+    planPause();
+    planChanged();
+    requestDrawAll();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'o' || e.key === 'O')) {
+    if (appMode !== "viewing") return;
+    e.preventDefault();
+    fileEl?.click();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if (appMode === "planning") {
+      planWaypoints = [];
+      planSetSelection([]);
+      planPlayDist = 0;
+      planPause();
+      planChanged();
+      requestDrawAll();
+    } else {
+      clearAllPosesAndWatches();
+      liveWinEl.value = "";
+    }
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    // Force kill when connected in viewing mode
+    if (appMode === "viewing") {
+      void stopStreaming(true);
+    }
+    return;
+  }
+  if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+    if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      if (appMode === "viewing") {
+        if (leftConnected) {
+          if (!leftStreaming) void startStreaming();
+          else void stopStreaming(false);
+        }
+      } else {
+        if (planPlaying) planPause();
+        else planPlay();
+      }
+      return;
+    }
+    if (e.key === 't' || e.key === 'T') {
+      e.preventDefault();
+      if (appMode === "viewing" && btnTogglePlanOverlay) {
+        btnTogglePlanOverlay.click();
+      }
+      return;
+    }
+    if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      if (appMode === "viewing") {
+        if (leftConnected) disconnectLeft();
+        else void connectLeft();
+      }
+      return;
+    }
+  }
+  if (e.key === 'f' || e.key === 'F') {
+    e.preventDefault();
+    resetFieldPosition();
+    return;
+  }
+  if (appMode === "planning") {
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+    const isTyping = (tag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable));
+    if (isTyping) return;
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (planPlaying) planPause();
+      else planPlay();
+      requestDrawAll();
+      return;
+    }
+    if ((e.key === "Delete" || e.key === "Backspace") && planSelectedSet.size) {
+      e.preventDefault();
+      const toRemove = Array.from(planSelectedSet).sort((a,b) => b - a);
+      for (const idx of toRemove) {
+        if (idx >= 0 && idx < planWaypoints.length) planWaypoints.splice(idx, 1);
+      }
+      planSetSelection([]);
+      planChanged();
+      requestDrawAll();
+      return;
+    }
+    const step = getPlanMoveStepIn();
+    if (planSelectedSet.size) {
+      let dx = 0, dy = 0;
+      if (e.key === "ArrowLeft") dx = -step;
+      if (e.key === "ArrowRight") dx = step;
+      if (e.key === "ArrowUp") dy = step;
+      if (e.key === "ArrowDown") dy = -step;
+      if (dx !== 0 || dy !== 0) {
+        e.preventDefault();
+        for (const idx of planSelectedSet) {
+          if (idx >= 0 && idx < planWaypoints.length) {
+            planWaypoints[idx].x = applyPlanSnap(planWaypoints[idx].x + dx);
+            planWaypoints[idx].y = applyPlanSnap(planWaypoints[idx].y + dy);
+          }
+        }
+        planChanged();
+        requestDrawAll();
+        return;
+      }
+    }
+  }
   if (!data) return;
   // Don't steal keys while typing in inputs/textareas (except the read-only live window).
   const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
@@ -3726,6 +4615,8 @@ document.addEventListener('keydown', (e) => {
 // -------- init --------
 loadFieldOptions();
 void loadSettings(); // Load saved settings
+void loadSavedPaths();
+setMode("viewing");
 // Ensure modals start hidden
 if (helpModal) {
   helpModal.setAttribute('hidden', '');
@@ -3753,10 +4644,12 @@ const bridgeReadyPoll = setInterval(() => {
 window.addEventListener('resize', () => {
   updateFieldLayout(true); // keep bounds, recompute square sizing
   resizeTimeline();
+  resizePlanningTimeline();
 });
 
 updateFieldLayout(false);
 resizeTimeline();
+resizePlanningTimeline();
 if (robotImgControlsEl) robotImgControlsEl.hidden = true;
 if (settingsRobotImgControls) settingsRobotImgControls.hidden = true;
 syncRobotImgTxFromInputs();
