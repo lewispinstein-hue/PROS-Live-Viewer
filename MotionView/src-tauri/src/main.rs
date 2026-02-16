@@ -137,6 +137,18 @@ fn main() {
         win.eval(&format!(
           "window.__BRIDGE_ORIGIN__ = 'http://127.0.0.1:{port}';"
         ))?;
+
+        #[cfg(not(mobile))]
+        {
+          if let Ok(Some(state)) = settings::read_window_state(app.handle()) {
+            if state.fullscreen {
+              let _ = win.set_fullscreen(true);
+            } else {
+              let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(state.width, state.height)));
+              let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(state.x, state.y)));
+            }
+          }
+        }
       }
       Ok(())
     })
@@ -147,19 +159,39 @@ fn main() {
         // Fires when any window is closed/destroyed (covers clicking the red X)
         RunEvent::WindowEvent { label, event, .. } => {
           if label == "main" {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
-              stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
+            match event {
+              tauri::WindowEvent::CloseRequested { .. } => {
+                if let Some(win) = app_handle.get_webview_window("main") {
+                  if let Err(err) = settings::save_window_state(&app_handle, &win) {
+                    eprintln!("Failed to save window state: {err}");
+                  }
+                }
+              }
+              tauri::WindowEvent::Destroyed => {
+                stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
+              }
+              _ => {}
             }
           }
         }
 
         // Fires when the app is exiting normally
         RunEvent::Exit => {
+          if let Some(win) = app_handle.get_webview_window("main") {
+            if let Err(err) = settings::save_window_state(&app_handle, &win) {
+              eprintln!("Failed to save window state: {err}");
+            }
+          }
           stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
         }
 
         // Fires on quit requests (Cmd+Q / Dock Quit / menu Quit)
         RunEvent::ExitRequested { .. } => {
+          if let Some(win) = app_handle.get_webview_window("main") {
+            if let Err(err) = settings::save_window_state(&app_handle, &win) {
+              eprintln!("Failed to save window state: {err}");
+            }
+          }
           stop_bridge(&app_handle.state::<BridgeState>(), app_handle);
         }
 

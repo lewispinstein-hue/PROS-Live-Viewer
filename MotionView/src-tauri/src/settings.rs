@@ -6,6 +6,9 @@ use base64::Engine as _;
 const SETTINGS_FILE: &str = "user-preferences.json";
 const ROBOT_IMAGE_FILE_BASE: &str = "robot-image";
 const SAVED_PATHS_FILE: &str = "saved-paths.json";
+#[cfg(not(mobile))]
+#[allow(dead_code)]
+const WINDOW_STATE_FILE: &str = "window-state.json";
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -31,6 +34,17 @@ fn saved_paths_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e: tauri::Error| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join(SAVED_PATHS_FILE))
+}
+
+#[cfg(not(mobile))]
+#[allow(dead_code)]
+fn window_state_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e: tauri::Error| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(WINDOW_STATE_FILE))
 }
 
 #[tauri::command]
@@ -155,4 +169,49 @@ pub fn save_robot_image(app: AppHandle, dataUrl: String) -> Result<String, Strin
     let path = dir.join(filename);
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(not(mobile))]
+#[allow(dead_code)]
+pub fn save_window_state(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
+    let pos = window
+        .outer_position()
+        .map_err(|e| e.to_string())?;
+    let size = window
+        .outer_size()
+        .map_err(|e| e.to_string())?;
+    let fullscreen = window.is_fullscreen().unwrap_or(false);
+    let payload = serde_json::json!({
+        "x": pos.x,
+        "y": pos.y,
+        "width": size.width,
+        "height": size.height,
+        "fullscreen": fullscreen
+    });
+    let path = window_state_path(app)?;
+    let contents = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(path, contents).map_err(|e| e.to_string())
+}
+
+#[cfg(not(mobile))]
+#[derive(serde::Deserialize)]
+#[warn(dead_code)]
+pub struct WindowState {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub fullscreen: bool,
+}
+
+#[cfg(not(mobile))]
+#[allow(dead_code)]
+pub fn read_window_state(app: &AppHandle) -> Result<Option<WindowState>, String> {
+    let path = window_state_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let state: WindowState = serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+    Ok(Some(state))
 }

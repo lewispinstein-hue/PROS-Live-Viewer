@@ -74,6 +74,7 @@ const robotImgScaleEl = document.getElementById('robotImgScale');
 const robotImgOffXEl = document.getElementById('robotImgOffX');
 const robotImgOffYEl = document.getElementById('robotImgOffY');
 const robotImgRotEl = document.getElementById('robotImgRot');
+const robotImgAlphaEl = document.getElementById('robotImgAlpha');
 const minSpeedEl = document.getElementById('settingsMinSpeed');
 const maxSpeedEl = document.getElementById('settingsMaxSpeed');
 
@@ -93,6 +94,7 @@ const settingsRobotImgScale = document.getElementById('settingsRobotImgScale');
 const settingsRobotImgOffX = document.getElementById('settingsRobotImgOffX');
 const settingsRobotImgOffY = document.getElementById('settingsRobotImgOffY');
 const settingsRobotImgRot = document.getElementById('settingsRobotImgRot');
+const settingsRobotImgAlpha = document.getElementById('settingsRobotImgAlpha');
 const settingsFieldRotation = document.getElementById('settingsFieldRotation');
 const settingsUnitsSelect = document.getElementById('settingsUnitsSelect');
 const settingsRobotW = document.getElementById('settingsRobotW');
@@ -208,7 +210,7 @@ let robotImageEnabled = true; // toggle for showing/hiding robot image
 let robotImagePath = null;
 let robotImageDataUrl = null;
 
-const robotImgTx = { scale: 1, offXIn: 0, offYIn: 0, rotDeg: 0 };
+const robotImgTx = { scale: 1, offXIn: 0, offYIn: 0, rotDeg: 0, alpha: 1 };
 let fieldRotationDeg = 0;
 let fieldRotationRad = 0;
 let fieldRotationCos = 1;
@@ -250,6 +252,7 @@ let planPlayDist = 0;
 let planLastWall = null;
 const PLAN_SPEED = 1; // units per second
 const PLAN_POINT_R = 11;
+const PLAN_OVERLAY_POINT_R = 7;
 const PLAN_THETA_HANDLE_R = 6;
 const PLAN_THETA_HANDLE_OFFSET = 25;
 let planScrubbing = false;
@@ -708,7 +711,7 @@ function drawPlanningOverlay(force = false) {
     const p = planWaypoints[i];
     const sp = worldToScreen(p.x, p.y);
     const isSel = planSelectedSet.has(i);
-    const r = PLAN_POINT_R;
+    const r = (appMode !== "planning") ? PLAN_OVERLAY_POINT_R : PLAN_POINT_R;
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
     ctx.fillStyle = (i === planSelected) ? "rgba(180,220,255,1)" : (isSel ? "rgba(150,200,255,0.95)" : "rgba(120,180,255,0.9)");
@@ -772,6 +775,7 @@ function setMode(mode) {
   document.body.classList.toggle("mode-planning", appMode === "planning");
   if (appMode === "planning" && playing) pause();
   if (appMode === "viewing" && planPlaying) planPause();
+  planSetSelection([]);
   if (modeViewingBtn) {
     const active = appMode === "viewing";
     modeViewingBtn.classList.toggle("isActive", active);
@@ -1660,8 +1664,10 @@ function drawRobot(pose, alpha=1.0) {
     const ox = Number(robotImgTx.offXIn) || 0;
     const oy = Number(robotImgTx.offYIn) || 0;
     const r = (Number(robotImgTx.rotDeg) || 0) * Math.PI / 180;
+    const imgAlpha = clamp(Number(robotImgTx.alpha) || 1, 0, 1);
 
     ctx.save();
+    ctx.globalAlpha = alpha * imgAlpha;
     ctx.translate(ox * scale, -oy * scale);
     ctx.rotate(r);
     ctx.drawImage(robotImg, -(wPx*s)/2, -(hPx*s)/2, wPx*s, hPx*s);
@@ -3363,6 +3369,7 @@ btnLeftRefreshEl?.addEventListener('click', () => {
 leftRefreshIntervalEl?.addEventListener('change', () => {
   leftRefreshMs = parseInt(leftRefreshIntervalEl.value || "0", 10) || 0;
   startLeftRefresh();
+  saveSettings();
 });
 
 // Initialize UI on load
@@ -3801,6 +3808,19 @@ async function loadSettings() {
       if (settings.planSpeed !== undefined && settingsPlanSpeed) {
         settingsPlanSpeed.value = settings.planSpeed;
       }
+      if (settings.refreshIntervalMs !== undefined && leftRefreshIntervalEl) {
+        leftRefreshIntervalEl.value = String(settings.refreshIntervalMs);
+        leftRefreshMs = parseInt(leftRefreshIntervalEl.value || "0", 10) || 0;
+        startLeftRefresh();
+      }
+      if (settings.playbackSpeed !== undefined && speedSelect) {
+        speedSelect.value = String(settings.playbackSpeed);
+        playRate = Number(speedSelect.value) || 1;
+      }
+      if (settings.selectedField !== undefined && fieldSelect) {
+        fieldSelect.value = settings.selectedField;
+        loadFieldImage(settings.selectedField);
+      }
       if (settings.robotImgScale !== undefined) {
         robotImgTx.scale = settings.robotImgScale;
         if (robotImgScaleEl) robotImgScaleEl.value = settings.robotImgScale;
@@ -3820,6 +3840,11 @@ async function loadSettings() {
         robotImgTx.rotDeg = settings.robotImgRot;
         if (robotImgRotEl) robotImgRotEl.value = settings.robotImgRot;
         if (settingsRobotImgRot) settingsRobotImgRot.value = settings.robotImgRot;
+      }
+      if (settings.robotImgAlpha !== undefined) {
+        robotImgTx.alpha = clamp(Number(settings.robotImgAlpha) || 100, 0, 100) / 100;
+        if (robotImgAlphaEl) robotImgAlphaEl.value = String(Math.round(robotImgTx.alpha * 100));
+        if (settingsRobotImgAlpha) settingsRobotImgAlpha.value = String(Math.round(robotImgTx.alpha * 100));
       }
       if (settings.fieldRotation !== undefined) {
         setFieldRotationDeg(Number(settings.fieldRotation) || 0);
@@ -3871,10 +3896,14 @@ async function saveSettings() {
       planSnapStep: settingsPlanSnapStep ? settingsPlanSnapStep.value : '0',
       planThetaSnapStep: settingsPlanThetaSnapStep ? settingsPlanThetaSnapStep.value : '0',
       planSpeed: settingsPlanSpeed ? settingsPlanSpeed.value : '50',
+      refreshIntervalMs: leftRefreshIntervalEl ? leftRefreshIntervalEl.value : '0',
+      playbackSpeed: speedSelect ? speedSelect.value : '1',
+      selectedField: fieldSelect ? fieldSelect.value : DEFAULT_FIELD_KEY,
       robotImgScale: robotImgTx.scale,
       robotImgOffX: robotImgTx.offXIn,
       robotImgOffY: robotImgTx.offYIn,
       robotImgRot: robotImgTx.rotDeg,
+      robotImgAlpha: Math.round(clamp(Number(robotImgTx.alpha) || 1, 0, 1) * 100),
       robotImage: {
         path: robotImagePath || null,
         dataUrl: robotImagePath ? null : (robotImageDataUrl || null),
@@ -3958,6 +3987,11 @@ function syncSettingsToMain() {
     syncRobotImgTxFromInputs();
     requestDrawAll();
   }
+  if (settingsRobotImgAlpha && robotImgAlphaEl && settingsRobotImgAlpha.value !== robotImgAlphaEl.value) {
+    robotImgAlphaEl.value = settingsRobotImgAlpha.value;
+    syncRobotImgTxFromInputs();
+    requestDrawAll();
+  }
   saveSettings();
 }
 
@@ -3999,6 +4033,9 @@ function syncMainToSettings() {
   }
   if (robotImgRotEl && settingsRobotImgRot && robotImgRotEl.value !== settingsRobotImgRot.value) {
     settingsRobotImgRot.value = robotImgRotEl.value;
+  }
+  if (robotImgAlphaEl && settingsRobotImgAlpha && robotImgAlphaEl.value !== settingsRobotImgAlpha.value) {
+    settingsRobotImgAlpha.value = robotImgAlphaEl.value;
   }
 }
 
@@ -4471,11 +4508,15 @@ if (btnTogglePlanOverlay) {
 
 speedSelect.addEventListener('change', () => {
   playRate = Number(speedSelect.value) || 1;
+  saveSettings();
 });
 
 btnFit.addEventListener('click', () => resetFieldPosition());
 if (fieldSelect) {
-  fieldSelect.addEventListener('change', (e) => loadFieldImage(e.target.value));
+  fieldSelect.addEventListener('change', (e) => {
+    loadFieldImage(e.target.value);
+    saveSettings();
+  });
 }
 
 if (unitsSelect) {
@@ -4506,11 +4547,13 @@ function syncRobotImgTxFromInputs() {
   const offXEl = robotImgOffXEl || settingsRobotImgOffX;
   const offYEl = robotImgOffYEl || settingsRobotImgOffY;
   const rotEl = robotImgRotEl || settingsRobotImgRot;
+  const alphaEl = robotImgAlphaEl || settingsRobotImgAlpha;
 
   robotImgTx.scale = clamp(Number(scaleEl?.value || 1), 0.05, 20);
   robotImgTx.offXIn = Number(offXEl?.value || 0);
   robotImgTx.offYIn = Number(offYEl?.value || 0);
   robotImgTx.rotDeg = Number(rotEl?.value || 0);
+  robotImgTx.alpha = clamp(Number(alphaEl?.value || 100), 0, 100) / 100;
 }
 
 const onRobotImgInput = () => {
@@ -4524,10 +4567,12 @@ if (robotImgScaleEl) robotImgScaleEl.addEventListener('input', onRobotImgInput);
 if (robotImgOffXEl) robotImgOffXEl.addEventListener('input', onRobotImgInput);
 if (robotImgOffYEl) robotImgOffYEl.addEventListener('input', onRobotImgInput);
 if (robotImgRotEl) robotImgRotEl.addEventListener('input', onRobotImgInput);
+if (robotImgAlphaEl) robotImgAlphaEl.addEventListener('input', onRobotImgInput);
 if (settingsRobotImgScale) settingsRobotImgScale.addEventListener('input', onRobotImgInput);
 if (settingsRobotImgOffX) settingsRobotImgOffX.addEventListener('input', onRobotImgInput);
 if (settingsRobotImgOffY) settingsRobotImgOffY.addEventListener('input', onRobotImgInput);
 if (settingsRobotImgRot) settingsRobotImgRot.addEventListener('input', onRobotImgInput);
+if (settingsRobotImgAlpha) settingsRobotImgAlpha.addEventListener('input', onRobotImgInput);
 
 
 settingsMinSpeed.addEventListener('input', () => {
@@ -4797,7 +4842,7 @@ document.addEventListener('keydown', (e) => {
       }
       return;
     }
-    if (e.key === 't' || e.key === 'T') {
+    if (e.key === 't' || e.key === 'T' || e.key === 'p' || e.key === 'P') {
       e.preventDefault();
       if (appMode === "viewing" && btnTogglePlanOverlay) {
         btnTogglePlanOverlay.click();
@@ -4933,6 +4978,9 @@ document.addEventListener('keydown', (e) => {
     highlightPoseInList();
     updatePoseReadout();
     requestDrawAll();
+  }
+  if (e.key === "p") {
+    
   }
 });
 

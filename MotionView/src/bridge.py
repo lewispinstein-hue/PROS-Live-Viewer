@@ -27,7 +27,6 @@ def _get_lock():
     global PROS_PROJECT_DIR_LOCK
     if PROS_PROJECT_DIR_LOCK is None:
         try:
-            loop = asyncio.get_running_loop()
             PROS_PROJECT_DIR_LOCK = asyncio.Lock()
         except RuntimeError:
             # No event loop running, create new lock
