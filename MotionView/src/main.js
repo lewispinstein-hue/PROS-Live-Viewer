@@ -162,7 +162,7 @@ const TRACK_HOVER_PAD_PX = 12; // How close to the track before snapping on
 const OFFSET_MAX = 100; // Max offset in either direction
 
 const CANVAS_ZOOM_MAX = 12; // Max zoom in
-const CANVAS_ZOOM_MIN = 0.7; // Max zoom out
+const CANVAS_ZOOM_MIN = 0.35; // Max zoom out
 
 const minW = 50, maxW = 400;
 const minH = 49, maxH = 600; // Bring minH back to 241
@@ -233,6 +233,7 @@ let panArmed = false;
 let panPointerId = null;
 let panStart = { x: 0, y: 0, panX: 0, panY: 0 };
 let suppressNextClick = false;
+let panDelta = 0;
 
 let appMode = "viewing";
 
@@ -260,6 +261,7 @@ const PLAN_POINT_R = 11;
 const PLAN_OVERLAY_POINT_R = 7;
 const PLAN_THETA_HANDLE_R = 6;
 const PLAN_THETA_HANDLE_OFFSET = 25;
+const PLAN_MARKER_MAX_IN = 3;
 let planScrubbing = false;
 let planOverlayVisible = false;
 let savedPathsSaveTimer = null;
@@ -724,7 +726,8 @@ function drawPlanningOverlay(force = false) {
     const p = planWaypoints[i];
     const sp = worldToScreen(p.x, p.y);
     const isSel = planSelectedSet.has(i);
-    const r = (appMode !== "planning") ? PLAN_OVERLAY_POINT_R : PLAN_POINT_R;
+    const baseR = (appMode !== "planning") ? PLAN_OVERLAY_POINT_R : PLAN_POINT_R;
+    const r = Math.min(baseR, PLAN_MARKER_MAX_IN * scale);
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
     ctx.fillStyle = (i === planSelected) ? "rgba(180,220,255,1)" : (isSel ? "rgba(150,200,255,0.95)" : "rgba(120,180,255,0.9)");
@@ -747,6 +750,7 @@ function drawPlanningOverlay(force = false) {
     ctx.restore();
 
     if (isSel) {
+      const handleR = Math.min(PLAN_THETA_HANDLE_R, PLAN_MARKER_MAX_IN * scale);
       const dist = r + PLAN_THETA_HANDLE_OFFSET;
       const hx = sp.x + Math.sin(theta) * dist;
       const hy = sp.y - Math.cos(theta) * dist;
@@ -758,7 +762,7 @@ function drawPlanningOverlay(force = false) {
       ctx.lineTo(hx, hy);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(hx, hy, PLAN_THETA_HANDLE_R, 0, Math.PI * 2);
+      ctx.arc(hx, hy, handleR, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(90,160,255,1)";
       ctx.fill();
       ctx.strokeStyle = "rgba(0,0,0,0.9)";
@@ -844,13 +848,13 @@ function clampMax(v, max) {
 function sanitizeOffsetInputs() {
   const xRaw = toNumMaybe(offXEl?.value ?? settingsOffX?.value);
   if (xRaw != null) {
-    const clamped = clamp(xRaw, -MAX_OFFSET_X, MAX_OFFSET_X);
+    const clamped = clamp(xRaw, FIELD_BOUNDS_IN.minX, FIELD_BOUNDS_IN.maxX);
     if (offXEl) offXEl.value = String(clamped);
     if (settingsOffX) settingsOffX.value = String(clamped);
   }
   const yRaw = toNumMaybe(offYEl?.value ?? settingsOffY?.value);
   if (yRaw != null) {
-    const clamped = clamp(yRaw, -MAX_OFFSET_Y, MAX_OFFSET_Y);
+    const clamped = clamp(yRaw, FIELD_BOUNDS_IN.minY, FIELD_BOUNDS_IN.maxY);
     if (offYEl) offYEl.value = String(clamped);
     if (settingsOffY) settingsOffY.value = String(clamped);
   }
@@ -958,7 +962,7 @@ function heatColorFromNorm(n) {
   // Force "dark red" for very low speeds
   if (t0 <= lowCut) {
     // dark red, slightly transparent
-    return `rgba(120, 10, 10, 1)`;
+    return `rgba(120, 10, 10, 0.95)`;
   }
 
   // 2) Remap (lowCut..1) -> (0..1) so everything above 5 has visible range
@@ -1050,6 +1054,35 @@ function computeTransform() {
   offsetYpx = baseOffsetYpx * viewZoom + viewPanYpx;
 }
 
+function clampViewPanToVisibleMargin(marginPx = 15) {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || 1;
+  const h = rect.height || 1;
+  const corners = [
+    worldToScreen(bounds.minX, bounds.minY),
+    worldToScreen(bounds.minX, bounds.maxY),
+    worldToScreen(bounds.maxX, bounds.minY),
+    worldToScreen(bounds.maxX, bounds.maxY),
+  ];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const c of corners) {
+    minX = Math.min(minX, c.x);
+    maxX = Math.max(maxX, c.x);
+    minY = Math.min(minY, c.y);
+    maxY = Math.max(maxY, c.y);
+  }
+  let dx = 0, dy = 0;
+  if (maxX < marginPx) dx = marginPx - maxX;
+  else if (minX > w - marginPx) dx = (w - marginPx) - minX;
+  if (maxY < marginPx) dy = marginPx - maxY;
+  else if (minY > h - marginPx) dy = (h - marginPx) - minY;
+  if (dx !== 0 || dy !== 0) {
+    viewPanXpx += dx;
+    viewPanYpx += dy;
+    computeTransform();
+  }
+}
+
 function normalizeFieldRotation(deg) {
   const norm = ((deg % 360) + 360) % 360;
   if (norm === 90 || norm === 180 || norm === 270) return norm;
@@ -1103,6 +1136,7 @@ function resizeCanvas() {
   canvas.height = Math.max(1, Math.floor(rect.height * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   computeTransform();
+  clampViewPanToVisibleMargin();
   draw();
 }
 
@@ -2273,6 +2307,7 @@ function fitToPoses() {
 
 // -------- view controls (square maximize + pan/zoom) --------
 function resetView() {
+  panDelta = 0;
   viewZoom = 1;
   viewPanXpx = 0;
   viewPanYpx = 0;
@@ -2317,8 +2352,8 @@ canvas.addEventListener('wheel', (e) => {
   // world point under cursor (inches)
   const w0 = screenToWorld(mx, my);
 
-  const delta = (e.deltaY || 0);
-  const zoomFactor = Math.exp(-delta * 0.0012);
+  panDelta = (e.deltaY || 0);
+  const zoomFactor = Math.exp(-panDelta * 0.0012);
   const newZoom = clampZoom(viewZoom * zoomFactor);
 
   viewZoom = newZoom;
@@ -2334,8 +2369,8 @@ canvas.addEventListener('wheel', (e) => {
   const yR = w0.x * fieldRotationSin + w0.y * fieldRotationCos;
   viewPanXpx = mx - (xR * newScale + newOffXBase);
   viewPanYpx = my - (newOffYBase - yR * newScale);
-
   computeTransform();
+  clampViewPanToVisibleMargin();
   requestDrawAll();
 }, { passive:false });
 
@@ -2491,6 +2526,7 @@ canvas.addEventListener('pointermove', (e) => {
   viewPanYpx = panStart.panY + dy;
 
   computeTransform();
+  clampViewPanToVisibleMargin();
   requestDrawAll();
 });
 
@@ -2591,7 +2627,6 @@ function pickTrackPose(clientX, clientY) {
     speed_norm: (p0.speed_norm ?? 0) + ((p1.speed_norm ?? 0) - (p0.speed_norm ?? 0)) * a,
   };
 
-  // nearest index can stay if you still want it for list highlighting
   const nearestIdx = (a < 0.5) ? i0 : i1;
   return { pose, nearestIdx };
 }
@@ -3311,7 +3346,7 @@ async function doLeftRefresh() {
     watches.sort((a,b) => (a.t ?? 0) - (b.t ?? 0));
   }
 
-  // Recompute derived fields. This is cheap at your scale (<~4000 poses).
+  // Recompute derived fields. This is cheap at this scale (<~4000 poses).
   computeSpeedNorm();
 
   if (watchesAdded > 0) {
@@ -4822,13 +4857,11 @@ function clearAllPosesAndWatches() {
   rawPoses = [];
   watches = [];
 
-  // Clear any derived / UI lists if you have them
   try { watchMarkers = []; } catch {}
   try { watchByLabel = {}; } catch {}
   try { lastPoseIndex = 0; } catch {}
   try { livePendingLines = []; livePendingConsumed = 0; } catch {}
 
-  // Keep `data` consistent if you use it elsewhere
   if (typeof data === "object" && data) {
     data.poses = [];
     data.watches = [];
@@ -4837,7 +4870,6 @@ function clearAllPosesAndWatches() {
   // Reset selection + redraw
   selectedIndex = 0;
 
-  // If you have helper functions, call them; guard so no crashes
   try { renderPoseList?.(); } catch {}
   try { renderWatchList?.(); } catch {}
   try { updatePoseReadout?.(); } catch {}
@@ -4936,7 +4968,7 @@ document.addEventListener('keydown', (e) => {
       }
       return;
     }
-    if (e.key === 't' || e.key === 'T' || e.key === 'p' || e.key === 'P') {
+    if (e.key === 'p' || e.key === 'P') {
       e.preventDefault();
       if (appMode === "viewing" && btnTogglePlanOverlay) {
         btnTogglePlanOverlay.click();
