@@ -22,6 +22,10 @@ PROS_PROJECT_DIR = None
 # Lock will be created when needed (can't create Lock outside async context)
 PROS_PROJECT_DIR_LOCK = None
 
+# Optional override for PROS executable
+PROS_EXE_OVERRIDE = None
+PROS_EXE_LOCK = None
+
 def _get_lock():
     """Get or create the lock for PROS_PROJECT_DIR updates."""
     global PROS_PROJECT_DIR_LOCK
@@ -32,6 +36,16 @@ def _get_lock():
             # No event loop running, create new lock
             PROS_PROJECT_DIR_LOCK = asyncio.Lock()
     return PROS_PROJECT_DIR_LOCK
+
+def _get_pros_exe_lock():
+    """Get or create the lock for PROS_EXE_OVERRIDE updates."""
+    global PROS_EXE_LOCK
+    if PROS_EXE_LOCK is None:
+        try:
+            PROS_EXE_LOCK = asyncio.Lock()
+        except RuntimeError:
+            PROS_EXE_LOCK = asyncio.Lock()
+    return PROS_EXE_LOCK
 
 def _candidate_vscode_install_bases() -> List[Path]:
     """
@@ -131,10 +145,55 @@ def configure_pros_env_from_vscode() -> Optional[str]:
 
     return None
 
+def resolve_pros_exe() -> Optional[str]:
+    # Prefer explicit override, then VS Code-managed PROS, then PATH lookup
+    if PROS_EXE_OVERRIDE:
+        return str(PROS_EXE_OVERRIDE)
+    return configure_pros_env_from_vscode() or shutil.which("pros") or shutil.which("pros.exe")
+
 # Prefer VS Code-managed PROS if present; else fall back to PATH lookup
-PROS_EXE = configure_pros_env_from_vscode() or shutil.which("pros") or shutil.which("pros.exe")
+PROS_EXE = resolve_pros_exe()
 if not PROS_EXE:
-    raise RuntimeError(f"'pros' not found. PATH={os.environ.get('PATH','')}")
+    print("[WARN] PROS CLI not found on PATH or VS Code install. Live streaming may not work.", file=sys.stderr)
+
+def _find_pros_executables() -> List[str]:
+    sysname = platform.system()
+    candidates: List[Path] = []
+
+    for base in _candidate_vscode_install_bases():
+        if sysname == "Darwin":
+            candidates.append(base / "pros-cli-macos" / "pros")
+        elif sysname == "Windows":
+            candidates.append(base / "pros-cli-windows" / "pros.exe")
+        else:
+            candidates.append(base / "pros-cli-linux" / "pros")
+
+    # PATH lookup
+    p = shutil.which("pros") or shutil.which("pros.exe")
+    if p:
+        candidates.append(Path(p))
+
+    # Common locations (best-effort)
+    if sysname == "Darwin":
+        candidates += [Path("/usr/local/bin/pros"), Path("/opt/homebrew/bin/pros")]
+    elif sysname == "Linux":
+        candidates += [Path("/usr/local/bin/pros"), Path("/usr/bin/pros")]
+
+    out: List[str] = []
+    seen = set()
+    for c in candidates:
+        try:
+            cp = c.expanduser().resolve()
+        except Exception:
+            continue
+        if not cp.exists() or not cp.is_file():
+            continue
+        s = str(cp)
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
 # Resource paths (PyInstaller-friendly)
 # ----------------------------
 def resource_base_dir() -> Path:
@@ -586,6 +645,44 @@ async def api_set_pros_dir(request: Request):
         return {"ok": True, "dir": str(PROS_PROJECT_DIR)}
     except Exception as e:
         return {"ok": False, "status": f"error: {e}"}
+
+@app.get("/api/pros-exe")
+async def api_get_pros_exe():
+    exe = resolve_pros_exe()
+    if exe:
+        return {"ok": True, "path": exe}
+    return {"ok": False, "status": "pros executable not found"}
+
+@app.post("/api/pros-exe")
+async def api_set_pros_exe(request: Request):
+    """Set the PROS CLI executable path. Expects JSON body with 'path' field."""
+    try:
+        body = await request.json()
+        path_str = body.get("path")
+        if not path_str:
+            return {"ok": False, "status": "missing 'path' field"}
+        path = Path(path_str).expanduser().resolve()
+        if not path.exists():
+            return {"ok": False, "status": f"path does not exist: {path}"}
+        if not path.is_file():
+            return {"ok": False, "status": f"path is not a file: {path}"}
+
+        lock = _get_pros_exe_lock()
+        async with lock:
+            global PROS_EXE_OVERRIDE, PROS_EXE
+            PROS_EXE_OVERRIDE = path
+            PROS_EXE = str(path)
+        return {"ok": True, "path": str(path)}
+    except Exception as e:
+        return {"ok": False, "status": f"error: {e}"}
+
+@app.get("/api/pros-exe/auto")
+async def api_auto_pros_exe():
+    try:
+        candidates = _find_pros_executables()
+        return {"ok": True, "candidates": candidates}
+    except Exception as e:
+        return {"ok": False, "status": f"error: {e}", "candidates": []}
 
 
 # ----------------------------

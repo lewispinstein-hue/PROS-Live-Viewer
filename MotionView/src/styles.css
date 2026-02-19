@@ -1086,7 +1086,7 @@
   
   .settingsInput:focus, .settingsSelect:focus {
     outline: none;
-    border-color: #6ea8ff;
+    border-color: #1c355b;
     background: rgba(0,0,0,0.5);
     box-shadow: 0 0 0 3px rgba(110, 168, 255, 0.15);
   }

@@ -6,6 +6,8 @@ use std::{
   sync::Mutex,
 };
 use std::{fs, process::Stdio};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -101,8 +103,32 @@ fn resolve_bridge_bin(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
 
 fn stop_bridge(state: &tauri::State<BridgeState>, app: &tauri::AppHandle) {
   if let Some(mut child) = state.0.lock().unwrap().take() {
-    let _ = child.kill();
-    let _ = child.wait(); // avoid zombie
+    #[cfg(unix)]
+    {
+      let pid = child.id() as i32;
+      // Try graceful stop of the process group first
+      let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(format!("-{}", pid))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+      let _ = child.wait();
+      // Ensure the process group is gone
+      let _ = Command::new("kill")
+        .arg("-KILL")
+        .arg(format!("-{}", pid))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    }
+    #[cfg(not(unix))]
+    {
+      let _ = child.kill();
+      let _ = child.wait(); // avoid zombie
+    }
   }
   if let Ok(path) = pid_path(app) {
     let _ = fs::remove_file(path);
@@ -118,8 +144,15 @@ fn pid_path(app: &tauri::AppHandle) -> Result<PathBuf, tauri::Error> {
 #[cfg(unix)]
 fn kill_pid(pid: u32) {
   let _ = Command::new("kill")
-    .arg("-9")
-    .arg(pid.to_string())
+    .arg("-TERM")
+    .arg(format!("-{}", pid))
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status();
+  let _ = Command::new("kill")
+    .arg("-KILL")
+    .arg(format!("-{}", pid))
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
@@ -179,7 +212,16 @@ fn spawn_bridge(app: &tauri::AppHandle, port: u16) -> Result<Child, tauri::Error
   let _ = writeln!(log, "spawn_bridge: exe={:?} port={}", exe, port);
   let log_err = log.try_clone().map_err(tauri::Error::Io)?;
 
-  Command::new(exe)
+  unsafe {
+    Command::new(exe)
+      .pre_exec(|| {
+        // Put sidecar in its own process group so we can terminate it and children.
+        unsafe {
+          libc::setsid();
+        }
+        Ok(())
+      })
+  }
     .args(["--host", "127.0.0.1", "--port", &port.to_string()])
     .current_dir(&workdir)
     .stdout(Stdio::from(log))

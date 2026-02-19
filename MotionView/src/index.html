@@ -50,14 +50,13 @@
   <div class="modalBackdrop"></div>
   <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
     <div class="modalHeader">
-      <div id="helpTitle" style="font-weight:900;font-size:16px">JerryForge Viewer — Help</div>
+      <div id="helpTitle" style="font-weight:900;font-size:16px">MotionView — Help</div>
       <button id="btnHelpClose" class="iconBtn" title="Close">✕</button>
     </div>
     <div class="modalBody">
+      MotionView is a PROS Live viewer that allows you to compare timings, adjust routes, and view your robot live, all in once place.
       <p>
-        To use the livestream feature, simply add a pros::Task to your code that logs in this format: <br>
-        <code>[DATA],time(ms),x,y,theta,l_vel,r_vel</code><br>
-
+        <a href="https://github.com/lewispinstein-hue/MotionView/tree/main">More Information</a>
       </p>
       <div style="margin-top:10px">
         <div style="font-weight:850;margin-bottom:6px">Main elements</div>
@@ -143,9 +142,29 @@
             <input id="prosDirInput" type="text" placeholder="/path/to/pros/project" class="settingsInput" style="flex:1" />
             <button id="btnProsDirAuto" class="iconBtn secondaryBtn" style="font-size:12px">Auto-detect</button>
           </div>
-          <div id="prosDirAutoStatus" class="muted" style="margin-top:6px;font-size:11px">No scan yet</div>
-          <div id="prosDirAutoResults" style="margin-top:8px;font-size:12px"></div>
+          <div id="prosDirAutoStatus" class="muted" style="margin-bottom: 0px !important;margin-top:6px;font-size:11px">No scan yet</div>
+          <div id="prosDirAutoResults" style="margin-top:8px;font-size:12px" hidden></div>
           <div id="prosDirStatus" class="muted" style="margin-top:6px;font-size:11px">Set the PROS project directory for live viewing functionality</div>
+        </div>
+      </div>
+
+      <div class="divider settingsViewing" style="margin:10px 0;"></div>
+
+      <!-- PROS Exe Selection -->
+      <div class="settingsSection settingsViewing settingsGroup" title="The path to your PROS CLI. Used for Live Viewing only">
+        <div class="settingsGroupHeader">
+          <div class="settingsGroupIcon">💿</div>
+          <div class="settingsGroupTitle">PROS Path</div>
+        </div>
+        <div class="settingsGroupBody">
+          <label class="settingsDescription">Manual: enter a path. Auto: scan computer for the pros-cli.</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="prosExeInput" type="text" placeholder="/path/to/pros-cli" class="settingsInput" style="flex:1" />
+            <button id="btnProsExeAuto" class="iconBtn secondaryBtn" style="font-size:12px">Auto-detect</button>
+          </div>
+          <div id="prosExeAutoStatus" class="muted" style="margin-bottom: 0px !important;margin-top:6px;font-size:11px">No scan yet</div>
+          <div id="prosExeAutoResults" style="margin-top:8px;font-size:12px" hidden></div>
+          <div id="prosExeStatus" class="muted" style="margin-top:6px;font-size:11px">Set the pros-cli location for live viewing functionality</div>
         </div>
       </div>
 

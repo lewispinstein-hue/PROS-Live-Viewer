@@ -42,7 +42,7 @@ Features:
 
 ## Prerequisites
 MotionView requires nothing out of the box to load files, but some features require external dependencies. 
-1. **Live streaming:** This feature requires you to have both a PROS Project locally on your computer, and to have the `PROS Extension` installed through `VSCode` or `Cursor`.
+1. **Live streaming:** This feature requires you to have both a PROS Project locally on your computer, and to have the [`PROS Extension`](https://marketplace.visualstudio.com/items?itemName=sigbots.pros) installed through `VS Code` or `Cursor`.
 
 ## Livestream Setup
 1. In order to livestream, you must be connected to your robot via the controller or brain, and be using a `Pose logger`. For a minimal, easy to setup logger, visit [MVLib](</Example Project - MVLib/README.md>), a complete Logger Library.

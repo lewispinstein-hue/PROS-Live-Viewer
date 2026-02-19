@@ -90,6 +90,8 @@ const btnSettingsClose = document.getElementById('btnSettingsClose');
 const modeViewingBtn = document.getElementById('modeViewing');
 const modePlanningBtn = document.getElementById('modePlanning');
 const prosDirInput = document.getElementById('prosDirInput');
+const prosExeInput = document.getElementById('prosExeInput');
+const btnProsExeAuto = document.getElementById('btnProsExeAuto');
 const btnProsDirAuto = document.getElementById('btnProsDirAuto');
 const btnUploadRobotImage = document.getElementById('btnUploadRobotImage');
 const robotImageFile = document.getElementById('robotImageFile');
@@ -124,10 +126,15 @@ const planSelThetaEl = document.getElementById('planSelTheta');
 const prosDirStatusEl = document.getElementById('prosDirStatus');
 const prosDirAutoStatusEl = document.getElementById('prosDirAutoStatus');
 const prosDirAutoResultsEl = document.getElementById('prosDirAutoResults');
+const prosExeStatusEl = document.getElementById('prosExeStatus');
+const prosExeAutoStatusEl = document.getElementById('prosExeAutoStatus');
+const prosExeAutoResultsEl = document.getElementById('prosExeAutoResults');
 let prosDirValid = false;
+let prosExeValid = false;
 let prosDirRetryTimer = null;
 let prosDirRetryAttempts = 0;
 let prosDirFromSettings = false;
+let prosExeFromSettings = false;
 
 // --- FIELD IMAGES ---
 const FIELD_IMAGES = [
@@ -483,11 +490,9 @@ function setPlanDist(d) {
 
 function updatePlanControls() {
   if (!btnPlay) return;
-  if (appMode === "planning") {
-    btnPlay.disabled = planWaypoints.length < 2;
-  } else {
-    btnPlay.disabled = rawPoses.length < 2;
-  }
+
+  if (appMode === "planning") btnPlay.disabled = planWaypoints.length < 2;
+  else btnPlay.disabled = rawPoses.length < 2;
 }
 
 function renderPlanList() {
@@ -572,6 +577,7 @@ async function loadSavedPaths() {
         syncMainToSettings();
         try { renderPoseList?.(); } catch {}
         try { renderWatchList?.(); } catch {}
+        updatePlanControls();
         updateFieldLayout(true);
         updatePoseReadout();
         requestDrawAll();
@@ -2160,7 +2166,7 @@ function findTemporallyClosestWatch(targetMs) {
 
 // Data Update Function
 function updateFloatingInfo(pose, idx) {
-  if (floatWin.hidden) {
+  if (floatWin.hidden || !pose) {
     document.getElementById('fx').textContent = "—";
     document.getElementById('fy').textContent = "—";
     document.getElementById('ft').textContent = "—";
@@ -2168,6 +2174,7 @@ function updateFloatingInfo(pose, idx) {
     document.getElementById('favg').textContent = "—";
     document.getElementById('flv').textContent = "—";
     document.getElementById('frv').textContent = "—";
+    document.getElementById('fdeltat').textContent = "—";
     document.getElementById('fcount').textContent = "Point: —/—";
     return;
   }
@@ -3260,7 +3267,7 @@ async function connectLeft() {
     await updateProsDir(prosDirInput.value);
   }
   if (!prosDirValid) {
-    liveAppendLine('[UI] Cannot connect: PROS project directory is not set or invalid. Set it in Settings → PROS Directory. Try restarting the application.');
+    liveAppendLine('[UI] Cannot connect: PROS project directory is not set, invalid, or cannot be validated. Set it in Settings → PROS Directory. Try restarting the application.');
     setStatus('Cannot connect: set a valid PROS directory in Settings first.');
     return;
   }
@@ -3808,24 +3815,27 @@ async function handleFile(file) {
   }
 }
 
+async function openFile(file, inputEl) {
+  if (!file) return;
+  // Validate file extension
+  const validExtensions = ['.txt', '.log', '.json'];
+  const fileName = file.name.toLowerCase();
+  const isValid = validExtensions.some(ext => fileName.endsWith(ext));
+  if (!isValid) {
+    alert('Invalid file type. Please select a .txt, .log, or .json file');
+    if (inputEl) inputEl.value = ''; // allow reselect
+    setStatus('Invalid file type.');
+    return;
+  }
+  await handleFile(file);
+  if (inputEl) inputEl.value = ''; // allow reselecting same file
+}
+
 // -------- controls wiring --------
 btnFile.addEventListener('click', () => fileEl.click());
 fileEl.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
-  if (file) {
-    // Validate file extension
-    const validExtensions = ['.txt', '.log', '.json'];
-    const fileName = file.name.toLowerCase();
-    const isValid = validExtensions.some(ext => fileName.endsWith(ext));
-    
-    if (!isValid) {
-      alert('Invalid file type. Please select a .txt, .log, or .json file');
-      e.target.value = ''; // Clear the input
-      return;
-    }
-    
-    handleFile(file);
-  }
+  openFile(file, e.target);
 });
 
 
@@ -3922,6 +3932,10 @@ async function loadSettings() {
       if (settings.prosDir && prosDirInput) {
         prosDirInput.value = settings.prosDir;
         prosDirFromSettings = true;
+      }
+      if (settings.prosExe && prosExeInput) {
+        prosExeInput.value = settings.prosExe;
+        prosExeFromSettings = true;
       }
       if (settings.robotImageEnabled !== undefined) robotImageEnabled = settings.robotImageEnabled;
       if (settings.units) {
@@ -4044,6 +4058,7 @@ async function saveSettings() {
   try {
     const settings = {
       prosDir: prosDirInput ? prosDirInput.value : '',
+      prosExe: prosExeInput ? prosExeInput.value : '',
       robotImageEnabled,
       units: settingsUnitsSelect ? settingsUnitsSelect.value : (unitsSelect ? unitsSelect.value : 'in'),
       robotW: robotWEl ? robotWEl.value : '12',
@@ -4391,6 +4406,18 @@ function setProsDirStatus(message, kind = 'info') {
   }
 }
 
+function setProsExeStatus(message, kind = 'info') {
+  if (!prosExeStatusEl) return;
+  prosExeStatusEl.textContent = message;
+  if (kind === 'error') {
+    prosExeStatusEl.style.color = '#ff9b9b';
+  } else if (kind === 'ok') {
+    prosExeStatusEl.style.color = '#9fddb0';
+  } else {
+    prosExeStatusEl.style.color = 'var(--muted)';
+  }
+}
+
 function setAutoStatus(message, kind = 'info') {
   if (!prosDirAutoStatusEl) return;
   prosDirAutoStatusEl.textContent = message;
@@ -4403,9 +4430,25 @@ function setAutoStatus(message, kind = 'info') {
   }
 }
 
+function setProsExeAutoStatus(message, kind = 'info') {
+  if (!prosExeAutoStatusEl) return;
+  prosExeAutoStatusEl.textContent = message;
+  if (kind === 'error') {
+    prosExeAutoStatusEl.style.color = '#ff9b9b';
+  } else if (kind === 'ok') {
+    prosExeAutoStatusEl.style.color = '#9fddb0';
+  } else {
+    prosExeAutoStatusEl.style.color = 'var(--muted)';
+  }
+}
+
 function renderAutoResults(candidates) {
-  if (!prosDirAutoResultsEl) return;
+  if (!prosDirAutoResultsEl) { 
+    prosDirAutoResultsEl.hidden = true;
+    return; 
+  }
   prosDirAutoResultsEl.innerHTML = '';
+  prosDirAutoResultsEl.hidden = false;
   if (!candidates || !candidates.length) {
     prosDirAutoResultsEl.textContent = '';
     prosDirAutoResultsEl.style.color = 'var(--muted)';
@@ -4436,11 +4479,57 @@ function renderAutoResults(candidates) {
       saveSettings();
       renderAutoResults([]);
       setAutoStatus('Applied.', 'ok');
+      prosDirAutoResultsEl.hidden = true;
     });
 
     row.appendChild(pathEl);
     row.appendChild(useBtn);
     prosDirAutoResultsEl.appendChild(row);
+  }
+}
+
+function renderProsExeAutoResults(candidates) {
+  if (!prosExeAutoResultsEl) {
+    return;
+  }
+  prosExeAutoResultsEl.innerHTML = '';
+  prosExeAutoResultsEl.hidden = false;
+  if (!candidates || !candidates.length) {
+    prosExeAutoResultsEl.textContent = '';
+    prosExeAutoResultsEl.style.color = 'var(--muted)';
+    return;
+  }
+  for (const p of candidates) {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.gap = '8px';
+    row.style.alignItems = 'center';
+    row.style.marginBottom = '6px';
+
+    const pathEl = document.createElement('div');
+    pathEl.textContent = p;
+    pathEl.style.flex = '1';
+    pathEl.style.fontFamily = 'monospace';
+    pathEl.style.fontSize = '12px';
+
+    const useBtn = document.createElement('button');
+    useBtn.className = 'iconBtn';
+    useBtn.style.fontSize = '11px';
+    useBtn.textContent = 'Use';
+    useBtn.addEventListener('click', () => {
+      if (!prosExeInput) return;
+      prosExeInput.value = p;
+      prosExeFromSettings = true;
+      updateProsExe(p);
+      saveSettings();
+      renderProsExeAutoResults([]);
+      setProsExeAutoStatus('Applied.', 'ok');
+      prosExeAutoResultsEl.hidden = true;
+    });
+
+    row.appendChild(pathEl);
+    row.appendChild(useBtn);
+    prosExeAutoResultsEl.appendChild(row);
   }
 }
 
@@ -4501,6 +4590,46 @@ async function updateProsDir(dir) {
   }
 }
 
+// PROS executable input
+async function updateProsExe(pathStr) {
+  const trimmed = (pathStr || '').trim();
+  if (!trimmed) {
+    prosExeValid = false;
+    setProsExeStatus('PROS CLI path not set. Auto-detect or enter a path.', 'info');
+    saveSettings();
+    return;
+  }
+  try {
+    const origin = refreshBridgeOrigin();
+    if (!origin) {
+      prosExeValid = false;
+      setProsExeStatus('Bridge not ready yet. Retrying...', 'error');
+      return;
+    }
+    const response = await fetch(`${origin}/api/pros-exe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: trimmed })
+    });
+    const result = await response.json();
+    if (result.ok) {
+      prosExeValid = true;
+      setStatus(`PROS CLI set to: ${result.path}`);
+      setProsExeStatus(`Using pros-cli: ${result.path}`, 'ok');
+      saveSettings();
+    } else {
+      prosExeValid = false;
+      setStatus(`Failed to set PROS CLI: ${result.status}`);
+      setProsExeStatus(`Invalid pros-cli: ${result.status}`, 'error');
+    }
+  } catch (e) {
+    prosExeValid = false;
+    console.error('Error updating PROS CLI:', e);
+    setStatus(`Error updating PROS CLI: ${e.message || e}`);
+    setProsExeStatus(`Error validating pros-cli: ${e.message || e}`, 'error');
+  }
+}
+
 if (prosDirInput) {
   let prosDirTimeout = null;
   prosDirInput.addEventListener('input', () => {
@@ -4508,6 +4637,17 @@ if (prosDirInput) {
     if (prosDirTimeout) clearTimeout(prosDirTimeout);
     prosDirTimeout = setTimeout(() => {
       updateProsDir(prosDirInput.value);
+    }, 500);
+    saveSettings();
+  });
+}
+
+if (prosExeInput) {
+  let prosExeTimeout = null;
+  prosExeInput.addEventListener('input', () => {
+    if (prosExeTimeout) clearTimeout(prosExeTimeout);
+    prosExeTimeout = setTimeout(() => {
+      updateProsExe(prosExeInput.value);
     }, 500);
     saveSettings();
   });
@@ -4539,6 +4679,31 @@ if (btnProsDirAuto) {
   });
 }
 
+if (btnProsExeAuto) {
+  btnProsExeAuto.addEventListener('click', async () => {
+    if (!refreshBridgeOrigin()) {
+      setProsExeAutoStatus('Backend not ready.', 'error');
+      return;
+    }
+    setProsExeAutoStatus('Scanning…');
+    try {
+      const response = await fetch(`${ORIGIN}/api/pros-exe/auto`);
+      const result = await response.json();
+      if (!result.ok) {
+        setProsExeAutoStatus(result.status || 'Auto-detect failed.', 'error');
+        renderProsExeAutoResults([]);
+        return;
+      }
+      renderProsExeAutoResults(result.candidates || []);
+      setProsExeAutoStatus(`Found ${result.candidates?.length || 0} candidate(s).`, 'ok');
+    } catch (e) {
+      console.error('Auto-detect failed:', e);
+      setProsExeAutoStatus('Auto-detect failed.', 'error');
+      renderProsExeAutoResults([]);
+    }
+  });
+}
+
 // Load PROS directory from API on startup
 async function loadProsDirFromAPI() {
   if (!refreshBridgeOrigin()) return;
@@ -4559,6 +4724,27 @@ async function loadProsDirFromAPI() {
   } catch (e) {
     prosDirValid = false;
     console.error('Error loading PROS directory from API:', e);
+  }
+}
+
+async function loadProsExeFromAPI() {
+  if (!refreshBridgeOrigin()) return;
+  try {
+    const response = await fetch(`${ORIGIN}/api/pros-exe`);
+    const result = await response.json();
+    if (result.ok && result.path && prosExeInput) {
+      const hasUserPath = prosExeFromSettings || (prosExeInput.value && prosExeInput.value.trim());
+      if (hasUserPath) return;
+      prosExeInput.value = result.path;
+      prosExeValid = true;
+      setProsExeStatus(`Using pros-cli: ${result.path}`, 'ok');
+      saveSettings();
+    } else {
+      prosExeValid = false;
+    }
+  } catch (e) {
+    prosExeValid = false;
+    console.error('Error loading PROS CLI:', e);
   }
 }
 
@@ -4966,10 +5152,10 @@ document.addEventListener('keydown', (e) => {
     requestDrawAll();
     return;
   }
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'o' || e.key === 'O')) {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'o' || e.key === 'O')) {
     if (appMode !== "viewing") return;
     e.preventDefault();
-    fileEl?.click();
+    fileEl.click();
     return;
   }
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
@@ -5175,6 +5361,10 @@ if (settingsModal) {
 setTimeout(() => {
   try {
     loadProsDirFromAPI();
+    loadProsExeFromAPI();
+    if (prosExeInput && prosExeInput.value && prosExeInput.value.trim()) {
+      updateProsExe(prosExeInput.value);
+    }
     updateConnectButtonState();
   } catch (e) {
     console.error('Error loading PROS dir:', e);
@@ -5184,6 +5374,10 @@ const bridgeReadyPoll = setInterval(() => {
   if (refreshBridgeOrigin()) {
     clearInterval(bridgeReadyPoll);
     loadProsDirFromAPI();
+    loadProsExeFromAPI();
+    if (prosExeInput && prosExeInput.value && prosExeInput.value.trim()) {
+      updateProsExe(prosExeInput.value);
+    }
   }
 }, 250);
 window.addEventListener('resize', () => {
@@ -5200,3 +5394,4 @@ if (settingsRobotImgControls) settingsRobotImgControls.hidden = true;
 syncRobotImgTxFromInputs();
 loadRobotImage();
 drawFirstField();
+updatePlanControls();
