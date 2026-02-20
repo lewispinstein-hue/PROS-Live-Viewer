@@ -100,7 +100,8 @@ logger.watch("Avg Temp:", mvlib::LogLevel::INFO, uint32_t{1000},
 
 // Flywheel RPM
 logger.watch("Flywheel RPM:", mvlib::LogLevel::INFO, uint32_t{1000}, // For an always changing event like this, prevent spam and log periodically.
-  [&]() { return flywheel.get_actual_velocity(); });
+  [&]() { return flywheel.get_actual_velocity(); },
+  mvlib::LevelOverride<double>{}, "%.1f"); // No level override, and print with 1 decimal
 
 // Intake current (detect jams)
 logger.watch("Intake Current:", mvlib::LogLevel::WARN, uint32_t{1000}, 
@@ -113,12 +114,14 @@ logger.watch("Intake Current:", mvlib::LogLevel::WARN, uint32_t{1000},
 
 // Auton stage (prints only when it changes)
 logger.watch("Auton Stage:", mvlib::LogLevel::INFO, true, 
-  [&]() { return autonStage; });
+  [&]() { return autonStage; }, 
+  mvlib::LevelOverride<int>{}, "%d"); // Assuming that autonStage is an int.
 ```
 
 MotionView will show these as a **watch list**, and the field hover will show the closest watch value at any point in the run.
 
-**How `.watch()` works:** it samples a value you provide and prints it either **on a timer** or **only when the value changes**. MotionView then shows those entries in the watch list and on the field.
+## How `.watch()` works: 
+`.watch()` samples a value you provide and prints it either **on a timer** or **only when the value changes**. MotionView then shows those entries in the watch list and on the field.
 
 **Overloads and parameters (high level):**
 - `watch(label, level, intervalMs, getter, levelOverride, fmt)`
