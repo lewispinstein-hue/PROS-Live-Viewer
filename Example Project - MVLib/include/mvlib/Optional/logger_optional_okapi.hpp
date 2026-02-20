@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file logger_optional_okapi.hpp
+ * @brief Optional Logger adapter for OkAPI odometry.
+ */
+
 #ifdef _MVLIB_OPTIONAL_USED
 #error "More than one type of Logger/Optional include used!"
 #endif
@@ -27,7 +32,7 @@ namespace mvlib {
  *
  * @note Unit conventions:
  * - OkapiLib commonly represents x and y as okapi::QLength and theta as okapi::QAngle.
- * - This implementation converts to **inches** for x/y and **radians** for theta (matching the
+ * - This implementation converts to **inches** for x/y and **degrees** for theta (matching the
  *   EZ-Template adapter we wrote and typical LemLib pose usage).
  *
  * If your downstream expects different units, change the conversions (or call the generic

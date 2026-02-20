@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file logger_optional_custom_odom.hpp
+ * @brief Optional Logger adapter for any custom or unsupported odometry.
+ */
+
 #ifdef _MVLIB_OPTIONAL_USED
 #error "More than one type of Logger/Optional include used!"
 #endif
@@ -29,9 +34,6 @@ namespace mvlib {
  * @tparam Fn Any callable type such that Fn() returns std::optional<Pose>.
  * @param logger The Logger instance that will consume the pose getter.
  * @param poseGetter A callable that returns std::optional<Pose> on demand.
- *
- * @note Your Pose units are entirely up to you. Just be consistent.
- *       For example, if your visualization expects inches and radians, return inches/radians.
  *
  * @warning If your callable captures pointers/references, you are responsible for ensuring
  *          they remain valid for as long as the Logger might invoke the callback.
