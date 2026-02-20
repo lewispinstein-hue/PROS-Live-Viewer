@@ -26,29 +26,53 @@
 ## Viewing Mode
 Use this mode to **replay and analyze** a run.
 
-Features:
-- Field view with the robot path and pose playback.
-- Overlay the Planned Path and compare with events to see what went wrong
-- Live streaming support and quick file import.
+What you see:
+- The field canvas draws the robot path, heading, and live pose playback so you can confirm movement shape, orientation, and speed at each timestamp.
+- A timeline scrubber/keyboard stepping lets you jump to specific poses, pause on key moments, or fast-forward to the end of the run.
+- The floating info island mirrors the current pose or live update, surfacing pose (x/y/theta), left and right wheel speeds, and the last watch values without needing to hover the field.
+- The poses list (below the field) lists every timestamped pose so you can jump directly to meaningful events, and the watches list tallies timed signals (solenoids, pneumatics, etc.) so you can filter for the stories that matter.
+ 
+Key controls:
+- Refresh button and interval animate the view on a set cadence when streaming, or you can tap Refresh to pull the latest poses/watches immediately; think of it as reloading the live buffer so the UI matches the source data.
+Key capabilities:
+- Overlay the planned path or a previous run to compare intent versus execution.
+- Toggle live streaming to keep the field updating in real time when connected to a robot, or use file import (`Cmd + O`) to review saved logs.
+- Use play/pause, step forward/back, and fit/reset (`F`) to keep attention on the most important moments.
 
 ## Planning Mode
 Use this mode to **plan and refine** a path before testing, or after.
 
-Features:
-- Place and edit waypoints on the field.
-- Play back the planned path for timing and shape checks.
-- Export or overlay plans against real runs for comparison.
-- Fix mistakes with `Cmd + Z` and `Shift + Cmd + Z`
+What you interact with:
+- Drop waypoints on the field and drag them to adjust radii/positions; each waypoint represents a target pose or action in the plan.
+- A specialist timeline shows the planned motion playback, letting you inspect how long the plan takes and how smoothly the robot turns.
+- The plan editor exposes undo/redo (`Cmd + Z`/`Cmd + Shift + Z`), nudging with arrow keys, and multiple selection for batch adjustments.
+
+Key capabilities:
+- Play back the plan exactly like a recorded run to inspect timing, heading changes, and acceleration before running on the robot.
+- Export the plan as JSON or overlay it in Viewing mode to compare with recorded telemetry.
+- Clear the plan (`Cmd + K`) to start fresh, or use nudging shortcuts (Shift + arrows for 5× steps) for micro precision.
 
 ## Prerequisites
 MotionView requires nothing out of the box to load files, but some features require external dependencies. 
 1. **Live streaming:** This feature requires you to have both a PROS Project locally on your computer, and to have the [`PROS Extension`](https://marketplace.visualstudio.com/items?itemName=sigbots.pros) installed through `VS Code` or `Cursor`.
 
 ## Livestream Setup
-1. In order to livestream, you must be connected to your robot via the controller or brain, and be using a `Pose logger`. For a minimal logger build for MotionView visit [**MVLib**](</Example Project - MVLib/README.md>), a Logger library.
-2. Inside of Settings, the `PROS Project Directory` must be filled out. If you do not have your robot's code on your computer – thats fine! All you need is to install the PROS VSCode Extension and `Create a new PROS Project`. From there, the app should be able to auto-detect your project.
-3. `PROS-CLI` Location: MotionView should be able automatically detect the location of the PROS Cli. If MotionView is unable to do that, go to the MotionView [Setup Guide](SETUP_GUIDE.md)
-4. Assuming your robot is logging correctly, MotionView detected your PROS-CLI, and was given your PROS Project Directory, live streaming should work!
+Livestreaming lets you watch a robot's pose logger in real time without opening a saved file.
+
+Core requirements:
+1. Be connected to your robot (controller/brain) and run a `Pose logger`; for a minimal logger build see [**MVLib**](</Example Project - MVLib/README.md>).
+2. Settings must point to a valid `PROS Project Directory`. If you do not have robot code locally, install the PROS VS Code Extension, create a new PROS project, and MotionView will auto-detect it.
+3. MotionView autodetects `PROS-CLI`, but refer to the [Setup Guide](SETUP_GUIDE.md) if it fails.
+
+What Livestream mode gives you:
+- A live-updating field view with the current pose, heading, and speed so you can monitor motion as it happens.
+- Watch values appear alongside poses, showing sensor states, pneumatics, or other telemetry the logger emits.
+- Controls let you Connect/Disconnect (`C`), start/stop streaming (`S`), auto-follow the robot head, and toggle overlays just like in Viewing Mode.
+
+Use cases:
+- Warm up the robot and verify that the logger is working before grabbing a file.
+- Compare live motion to saved plans to confirm sensors/fire sequences are firing when expected.
+- Capture a run simply by letting it stream and hitting `Cmd + O` to save the generated log afterward if needed.
 
 ## Keybinds
 
@@ -65,7 +89,7 @@ MotionView requires nothing out of the box to load files, but some features requ
 | Viewing | `Cmd + O` | Open JSON file |
 | Viewing | `Cmd + K` | Clear Viewer |
 | Viewing | `S` | Start/stop live streaming (if connected) |
-| Viewing | `T` / `P` | Toggle Planned Overlay |
+| Viewing | `P` | Toggle Planned Overlay |
 | Viewing | `C` | Connect/disconnect |
 | Viewing | `←` / `→` | Step to previous/next pose |
 | Planning | `Space / S` | Play/Pause plan playback |

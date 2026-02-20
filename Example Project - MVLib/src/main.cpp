@@ -54,6 +54,14 @@ void initialize() {
 		.RightDrivetrain = mvlib::shared(right_mg)
 	});
 
+	logger.watch("Avg Temp:", mvlib::LogLevel::OFF, true, // We do not log at all normally
+		[]() { return (left_mg.get_temperature() + right_mg.get_temperature()) / 2; },
+		mvlib::LevelOverride<double>{ // Use LevelOverride to only log if overheating
+			.elevatedLevel = mvlib::LogLevel::WARN,
+			.predicate = PREDICATE(v > 50), // implicit conversion, but fine because PROS reports whole degrees anyways
+			.label = "Overheating Drivetrain:"
+		}, "%.0f");
+		
 	// Start the logger
 	logger.start();
 }

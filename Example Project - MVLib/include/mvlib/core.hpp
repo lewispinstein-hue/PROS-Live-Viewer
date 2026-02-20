@@ -118,6 +118,7 @@ struct MutexGuard {
  */
 enum class LogLevel {
   NONE = 0, /// The lowest log level. Used for simply disabling logger.
+  OFF = 0,  /// Alias for NONE
   DEBUG,    /// Used for info related to startup and diagnostics
   INFO,     /// The most frequently used log level. 
   WARN,     /// Used for logs still not dangerous, but that should stand out
