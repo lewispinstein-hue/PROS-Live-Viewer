@@ -1,25 +1,36 @@
-# Running
+# Running MotionView
 
-1. Download `MotionView` from the [Official GitHub Link](https://github.com/lewispinstein-hue/MotionView/tree/main/Releases/MacOS)
-2. Double-click the downloaded file
-3. Drag MotionView into `applications` when prompted
-4.
+## Install MotionView
+1. Download MotionView from the official [GitHub release page](https://github.com/lewispinstein-hue/MotionView/tree/main/Releases/MacOS)
+3. Double-click the downloaded file.
+4. When prompted, drag MotionView.app into your Applications folder.
+
+## macOS Gatekeeper Fix (only needed once)
+macOS blocks all apps that aren’t notarized by Apple, even perfectly safe open-source tools. To let macOS know you trust this app, run:
 
 ```zsh
 xattr -dr com.apple.quarantine /Applications/MotionView.app
 ```
 
-If `/Applications/MotionView.app` is not found, navigate to your Applications folder, find MotionView, and copy it as a path name. Then, run:
+If the path differs, copy it directly from Finder inside the Applications folder (Right-click → Option-key → “Copy as Path”) and paste it:
 
 ```zsh
-xattr -dr com.apple.quarantine {paste-what-you-copied}
+xattr -dr com.apple.quarantine "<path you copied>"
 ```
 
-This should allow for you to launch MotionView.
+After this, MotionView should launch normally.
 
-## Fixing launch error
-**Q:** When I launched MotionView, a popup appeared saying that `MotionView is damaged and could not be run`. <br>
-**A:** This is likely *not* because the app was damaged in downloading, and can be fixed by following the steps above. 
+## If You See: “MotionView is damaged and can’t be opened”
+This is a standard macOS warning for non-notarized apps — not an indication of corruption. Removing the quarantine flag (Step 2) resolves it.
+macOS treats *every* non-notarized app this way.
 
-## Why this is needed
-Unfortunately, I am current not enrolled in the Apple Development Program. Because of this, I am unable to get MotionView to work out-of-the-box and get it verified with Apple. Right now, this is currently the best way to run MotionView on your Macbook.
+<p align="left">
+    <img src="../../assets/MotionView/verification_error.png" alt="Icon" width="315" />
+</p>
+
+## Why macOS Blocks It
+I’m not currently enrolled in Apple’s Developer Program, which means:
+- MotionView cannot yet be notarized by Apple.
+- macOS flags all non-notarized apps by default.
+- Removing the quarantine flag is the official way to run open-source tools distributed outside the App Store. <br>
+> This is the same process used for many GitHub-distributed developer tools and robotics programs.

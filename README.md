@@ -3,6 +3,16 @@
     <img src="assets/Logo.png" alt="Icon" width="315" />
 </p>
 
+## What is MotionView?
+MotionView is a cross-platform live visualizer built specifically for teams using PROS V5. It turns logged pose data, sensor watches, and live telemetries into an interactive field view so you can see exactly how your robot moved, when events fired, and how closely the actual motion matches the plan.
+
+**It exists** because watching raw terminal output or dumping JSON files makes it hard to spot subtle mistakes, compare two runs, or quickly iterate between planning and testing. MotionView gives you a single place to stream live logs from the controller, play back past recordings, and draft new plans with both the physical field and telemetry values visible at once.
+
+This is made for PROS teams who want faster post-match analysis, easier validation of auto routines, or a dependable visualization tool for clinics and classroom demos. Whether you are a veteran programmer debugging PID tuning or a new team learning how poses and watches relate, MotionView keeps the context you need in plain sight.
+
+
+### Why PROS?
+PROS is needed because of the terminal interface. Because `pros terminal`, run anywhere, always does the same action, it is very easy to get consistent connections and behavior using it. While it may be possible to use VEXCode (or any non-PROS platform), piping the terminal into MotionView is not easily done.
 
 ## Quick Start
 1. Open MotionView.
@@ -24,6 +34,10 @@
 - **Decision-friendly**: compare runs, spot issues, and iterate faster.
 
 ## Viewing Mode
+<p align="center">
+    <img src="assets/MotionView/viewing_mode.png" alt="Icon" width="500" />
+</p>
+
 Use this mode to **replay and analyze** a run.
 
 What you see:
@@ -40,6 +54,10 @@ Key capabilities:
 - Use play/pause, step forward/back, and fit/reset (`F`) to keep attention on the most important moments.
 
 ## Planning Mode
+<p align="center">
+    <img src="assets/MotionView/planning_mode.png" alt="Icon" width="500" />
+</p>
+
 Use this mode to **plan and refine** a path before testing, or after.
 
 What you interact with:
@@ -60,9 +78,9 @@ MotionView requires nothing out of the box to load files, but some features requ
 Livestreaming lets you watch a robot's pose logger in real time without opening a saved file.
 
 Core requirements:
-1. Be connected to your robot (controller/brain) and run a `Pose logger`; for a minimal logger build see [**MVLib**](</Example Project - MVLib/README.md>).
+1. Be connected to your robot (controller/brain) and run a `Posex logger`; for a minimal logger build see [**MVLib**](</Example Project - MVLib/README.md>).
 2. Settings must point to a valid `PROS Project Directory`. If you do not have robot code locally, install the PROS VS Code Extension, create a new PROS project, and MotionView will auto-detect it.
-3. MotionView autodetects `PROS-CLI`, but refer to the [Setup Guide](SETUP_GUIDE.md) if it fails.
+3. MotionView autodetects `PROS-CLI`, but refer to the [Setup Guide](MotionView/SETUP_GUIDE.md) if it fails.
 
 What Livestream mode gives you:
 - A live-updating field view with the current pose, heading, and speed so you can monitor motion as it happens.

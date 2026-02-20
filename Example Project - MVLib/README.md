@@ -104,7 +104,7 @@ logger.watch("Flywheel RPM:", mvlib::LogLevel::INFO, uint32_t{1000}, // For an a
   mvlib::LevelOverride<double>{}, "%.1f"); // No level override, and print with 1 decimal
 
 // Intake current (detect jams)
-logger.watch("Intake Current:", mvlib::LogLevel::WARN, uint32_t{1000}, 
+logger.watch("Intake Current:", mvlib::LogLevel::INFO, uint32_t{1000}, 
   [&]() { return intake.get_current_draw(); }, 
     mvlib::LevelOverride<int32_t>{
     .elevatedLevel = mvlib::LogLevel::WARN,

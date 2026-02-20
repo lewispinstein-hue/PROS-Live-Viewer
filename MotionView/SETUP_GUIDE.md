@@ -1,5 +1,9 @@
 # Setting up **MotionView**
-> MotionView `Settings` are located inside of the Gear icon, typically near the top left of your MotionView window.
+MotionView `Settings` are located inside of the Gear icon, typically near the top left of your MotionView window.
+
+<p align="center">
+    <img src="../assets/MotionView/pros_setup_settings.png" alt="Pros Config" width="800" />
+</p>
 
 MotionView was made to be easy to setup, with auto-detection when available. 
 In the case that auto-detection fails, or you have questions, here is where to look
@@ -20,8 +24,8 @@ The **PROS-CLI Path** is the path to your `pros` executable file. It's what allo
   - Open the command palate with `Cmd + Shift + P` or `Ctrl + Shift + P`
   - Search: `PROS: Integrated terminal` and click it
 3. Navigate to the terminal (which should have automatically opened) and type:
-  - > which pros (MacOS)
-  - > where pros (Windows) 
+  > which pros (MacOS) <br>
+  > where pros (Windows) 
 4. Copy the output of that command and paste it into MotionView Settings: `PROS Path`
 
 ### Finding it automatically

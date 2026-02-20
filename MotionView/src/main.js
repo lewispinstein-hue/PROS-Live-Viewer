@@ -31,7 +31,6 @@ const btnHelp = document.getElementById('btnHelp');
 const btnLeftStop = document.getElementById('btnLeftStop');
 const btnLeftConnect = document.getElementById('btnLeftConnect');
 const btnLeftRefresh = document.getElementById('btnLeftRefresh');
-const leftRefreshInterval = document.getElementById('leftRefreshInterval');
 const liveWin = document.getElementById('liveWin');
 const btnTogglePlanOverlay = document.getElementById('btnTogglePlanOverlay');
 const helpModal = document.getElementById('helpModal');
@@ -3335,8 +3334,8 @@ function leftSetUI(reason) {
   }
 
   // Refresh controls only meaningful while connected
-  if (btnLeftRefreshEl) btnLeftRefreshEl.disabled = !leftConnected || leftActionInFlight;
-  if (leftRefreshIntervalEl) leftRefreshIntervalEl.disabled = !leftConnected || leftActionInFlight;
+  if (btnLeftRefreshEl) btnLeftRefreshEl.disabled = !leftConnected || !leftActionInFlight;
+  if (leftRefreshIntervalEl) leftRefreshIntervalEl.disabled = !leftConnected;
 
   if (reason) {
     liveAppendLine(`[UI] ${reason}`);
