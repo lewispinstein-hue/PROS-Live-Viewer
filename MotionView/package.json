@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "py:build": "node scripts/build_py.js",
-    "tauri:build": "pnpm py:build && tauri build",
+    "dev": "pnpm py:build && tauri dev",
+    "build": "pnpm py:build && tauri build",
     "tauri": "tauri"
   },
   "devDependencies": {

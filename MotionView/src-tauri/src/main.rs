@@ -1,5 +1,4 @@
 use std::{
-  io,
   net::TcpListener,
   path::PathBuf,
   process::{Child, Command},
@@ -9,11 +8,8 @@ use std::{
 use std::{fs, process::Stdio};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::fs::OpenOptions;
-use std::io::Write;
 
 use tauri::{Manager, RunEvent};
-use tauri::path::BaseDirectory;
 
 mod settings;
 
@@ -24,82 +20,33 @@ fn pick_free_port() -> u16 {
   l.local_addr().unwrap().port()
 }
 
-fn resolve_bridge_bin(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
-  let mut resource_candidates = Vec::new();
-  if let Some(triple) = option_env!("TAURI_ENV_TARGET_TRIPLE") {
+fn resolve_bridge_bin(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
+    let mut bin_name = "motionview-py".to_string();
+    if let Some(triple) = option_env!("TAURI_ENV_TARGET_TRIPLE") {
+        bin_name.push_str("-");
+        bin_name.push_str(triple);
+    }
     if cfg!(target_os = "windows") {
-      resource_candidates.push(format!("bin/motionview-py-{triple}.exe"));
-      resource_candidates.push(format!("bin/motionview-py-{triple}"));
-    } else {
-      resource_candidates.push(format!("bin/motionview-py-{triple}"));
+        bin_name.push_str(".exe");
     }
-  }
-  if cfg!(target_os = "windows") {
-    resource_candidates.push("bin/motionview-py.exe".to_string());
-  }
-  resource_candidates.push("bin/motionview-py".to_string());
 
-  let mut exe_candidates = Vec::new();
-  if let Some(triple) = option_env!("TAURI_ENV_TARGET_TRIPLE") {
-    if cfg!(target_os = "windows") {
-      exe_candidates.push(format!("motionview-py"));
-      exe_candidates.push(format!("motionview-py-{triple}.exe"));
-      exe_candidates.push(format!("motionview-py-{triple}"));
-    } else {
-      exe_candidates.push(format!("motionview-py-{triple}"));
-    }
-  }
-  if cfg!(target_os = "windows") {
-    exe_candidates.push("motionview-py.exe".to_string());
-  }
-  exe_candidates.push("motionview-py".to_string());
+    let dev_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("bin")
+        .join(&bin_name);
 
-  if cfg!(target_os = "macos") {
-    if let Ok(exe) = std::env::current_exe() {
-      if let Some(dir) = exe.parent() {
-        for rel in &exe_candidates {
-          let p = dir.join(rel);
-          if p.exists() {
-            return Ok(p);
-          }
-        }
-      }
-    }
-    for rel in &exe_candidates {
-      if let Ok(p) = app.path().resolve(rel, BaseDirectory::Executable) {
-        if p.exists() {
-          return Ok(p);
-        }
-      }
-    }
-    for rel in &resource_candidates {
-      if let Ok(p) = app.path().resolve(rel, BaseDirectory::Resource) {
-        if p.exists() {
-          return Ok(p);
-        }
-      }
-    }
-  } else {
-    for rel in &resource_candidates {
-      if let Ok(p) = app.path().resolve(rel, BaseDirectory::Resource) {
-        if p.exists() {
-          return Ok(p);
-        }
-      }
-    }
-    for rel in &exe_candidates {
-      if let Ok(p) = app.path().resolve(rel, BaseDirectory::Executable) {
-        if p.exists() {
-          return Ok(p);
-        }
-      }
-    }
-  }
+    println!("CHECKING DEV PATH: {:?}", dev_path);
 
-  Err(tauri::Error::Io(io::Error::new(
-    io::ErrorKind::NotFound,
-    "motionview-py sidecar not found in bundle resources",
-  )))
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+
+    // --- PROD FALLBACK ---
+    let prod_path = app.path()
+        .resolve(format!("bin/{}", bin_name), tauri::path::BaseDirectory::Resource)
+        .map_err(|e| tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string())))?;
+
+    println!("CHECKING PROD PATH: {:?}", prod_path);
+    Ok(prod_path)
 }
 
 #[cfg(unix)]
@@ -228,49 +175,71 @@ fn write_bridge_pid(app: &tauri::AppHandle, pid: u32) {
   }
 }
 
-fn spawn_bridge(app: &tauri::AppHandle, port: u16) -> Result<Child, tauri::Error> {
-  let exe = resolve_bridge_bin(app)?;
-  let workdir = exe.parent().unwrap().to_path_buf();
-
-  let log_path = app
-    .path()
-    .app_data_dir()
-    .map(|dir| {
-      let ts = format_log_ts();
-      dir.join(format!("{ts}.log"))
+fn spawn_bridge(app: &tauri::AppHandle, port: u16) -> Result<std::process::Child, tauri::Error> {
+    // Resolve the Sidecar Binary Path
+    let exe = resolve_bridge_bin(app).map_err(|e| {
+        eprintln!("BRIDGE ERROR: Could not resolve binary: {}", e);
+        e
     })?;
-  if let Some(parent) = log_path.parent() {
-    let _ = fs::create_dir_all(parent);
-  }
-  let mut log = OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(&log_path)
-    .map_err(tauri::Error::Io)?;
-  let _ = writeln!(log, "spawn_bridge: exe={:?} port={}", exe, port);
-  let log_err = log.try_clone().map_err(tauri::Error::Io)?;
 
-  unsafe {
-    Command::new(exe)
-      .pre_exec(|| {
-        // Put sidecar in its own process group so we can terminate it and children.
+    // Setup Logging Directory and File
+    // We use app_data_dir, falling back to project root/logs if that fails
+    let log_dir = app.path().app_data_dir().unwrap_or_else(|_| {
+        std::env::current_dir().unwrap().join("logs")
+    });
+
+    // Create the directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("BRIDGE ERROR: Failed to create log directory {:?}: {}", log_dir, e);
+    }
+
+    let ts = format_log_ts();
+    let log_path = log_dir.join(format!("{ts}.log"));
+
+    // Open the log file
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| {
+            eprintln!("BRIDGE ERROR: Failed to open log file {:?}: {}", log_path, e);
+            tauri::Error::Io(e)
+        })?;
+    
+    let log_err = log.try_clone().map_err(tauri::Error::Io)?;
+
+    // Prepare Command
+    let mut cmd = std::process::Command::new(&exe);
+
+    // Apply Unix-specific process grouping (ignored on Windows)
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
         unsafe {
-          libc::setsid();
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
         }
-        Ok(())
-      })
-  }
-    .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-    .env("MOTIONVIEW_LOG_PATH", &log_path)
-    .current_dir(&workdir)
-    .stdout(Stdio::from(log))
-    .stderr(Stdio::from(log_err))
-    .spawn()
-    .map_err(tauri::Error::Io)
+    }
+
+    // Spawn
+    println!("SPAWNING BRIDGE: {:?} on port {}", exe, port);
+    
+    cmd.args(["--host", "127.0.0.1", "--port", &port.to_string()])
+        .env("MOTIONVIEW_LOG_PATH", &log_path)
+        .stdout(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(log_err))
+        .spawn()
+        .map_err(|e| {
+            eprintln!("BRIDGE ERROR: Failed to spawn process: {}", e);
+            tauri::Error::Io(e)
+        })
 }
 
 fn main() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_shell::init())
     .manage(BridgeState(Mutex::new(None)))
     .invoke_handler(tauri::generate_handler![
       settings::read_settings,
