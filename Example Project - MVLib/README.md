@@ -38,13 +38,13 @@ This is exactly what MotionView is built to consume, so MVLib is the easiest way
 3. Add **one** odom adapter header if you want pose tracking:
 
 ```cpp
-#include "mvlib/Optional/logger_optional_lemlib.hpp"
+#include "mvlib/Optional/mvlib_optional_lemlib.hpp"
 // or
-#include "mvlib/Optional/logger_optional_ez-template.hpp"
+#include "mvlib/Optional/mvlib_optional_ez-template.hpp"
 // or
-#include "mvlib/Optional/logger_optional_okapi.hpp"
+#include "mvlib/Optional/mvlib_optional_okapi.hpp"
 // or
-#include "mvlib/Optional/logger_optional_custom_odom.hpp"
+#include "mvlib/Optional/mvlib_optional_custom_odom.hpp"
 ```
 
 4. Start the logger in `initialize()`:
@@ -53,7 +53,7 @@ This is exactly what MotionView is built to consume, so MVLib is the easiest way
 // -------- Example: Bare Bones setup (no watches) -------- //
 #include "main.h"
 #include "mvlib/core.hpp"
-#include "mvlib/Optional/logger_optional_lemlib.hpp" // Example: Using LemLib odom
+#include "mvlib/Optional/mvlib_optional_lemlib.hpp" // Example: Using LemLib odom
 void initialize() {
   auto& logger = mvlib::Logger::getInstance();
 

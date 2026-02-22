@@ -6,7 +6,7 @@
  */
 
 #ifdef _MVLIB_OPTIONAL_USED
-#error "More than one type of Logger/Optional include used!"
+#error "More than one type of Mvlib Optional include used!"
 #endif
 
 #ifndef _MVLIB_OPTIONAL_USED
@@ -16,7 +16,8 @@
 
 #include <optional>
 namespace mvlib {
-    /**
+  
+/**
  * @brief Attach an OkapiLib odometry getter to the Logger.
  *
  * This overload adapts OkapiLib's odometry state into mvlib's Pose so the Logger can

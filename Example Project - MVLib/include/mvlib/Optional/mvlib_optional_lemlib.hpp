@@ -6,14 +6,15 @@
  */
 
 #ifdef _MVLIB_OPTIONAL_USED
-#error "More than one type of Logger/Optional include used!"
+#error "More than one type of Mvlib Optional include used!"
 #endif
 
 #ifndef _MVLIB_OPTIONAL_USED
 #define _MVLIB_OPTIONAL_USED
 #include "mvlib/core.hpp" // IWYU pragma: keep
-/* 
- * Depending on your version of LemLib, this include might be outdated.
+
+/** 
+ * @note Depending on your version of LemLib, this include might be outdated.
  * If lemlib/api.hpp is not found, it is likely this instead:
  * lemlib/lemlib.hpp
 */

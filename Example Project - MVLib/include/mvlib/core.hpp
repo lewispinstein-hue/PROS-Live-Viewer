@@ -498,20 +498,20 @@ private:
   void Update();
 
   /// @brief Validate that required robot references are present.
-  bool checkRobotConfig_();
+  bool m_checkRobotConfig();
 
   /// @brief Initialize SD logger file handle and state.
-  bool initSDLogger_();
+  bool m_initSDLogger();
 
   /// @brief Generate a timestamped filename into m_currentFilename.
-  void makeTimestampedFilename_();
+  void m_makeTimestampedFilename();
 
   /**
    * @brief Convert a LogLevel to a printable string.
    * @param level Log level to convert.
    * \return C-string representation of the level.
    */
-  const char *levelToString_(LogLevel level) const;
+  const char *m_levelToString(LogLevel level) const;
 
   /**
    * @struct Watch

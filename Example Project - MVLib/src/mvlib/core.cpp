@@ -63,7 +63,7 @@ bool Logger::setRobot(Drivetrain drivetrain) {
   return true;
 }
 
-const char *Logger::levelToString_(LogLevel level) const {
+const char *Logger::m_levelToString(LogLevel level) const {
   switch (level) {
   case LogLevel::DEBUG: return "DEBUG";
   case LogLevel::INFO:  return "INFO";
@@ -92,13 +92,13 @@ void Logger::logMessage(LogLevel level, const char *fmt, ...) {
   double time = pros::millis() / 1000.0;
 
   if (m_config.logToTerminal.load())
-    printf("[%.2f] [%s]: %s\n", time, levelToString_(level), buffer);
+    printf("[%.2f] [%s]: %s\n", time, m_levelToString(level), buffer);
 
   if (m_config.logToSD.load()) 
-    logToSD(levelToString_(level), "%s", buffer);
+    logToSD(m_levelToString(level), "%s", buffer);
 }
 
-void Logger::makeTimestampedFilename_() {
+void Logger::m_makeTimestampedFilename() {
   time_t now = time(0);
   struct tm *tstruct = localtime(&now);
 
@@ -113,7 +113,7 @@ void Logger::makeTimestampedFilename_() {
   }
 }
 
-bool Logger::initSDLogger_() {
+bool Logger::m_initSDLogger() {
   if (pros::usd::is_installed()) {
     printf("[DEBUG]: SD Card installed (On first attempt)\n");
     pros::delay(500);
@@ -134,7 +134,7 @@ bool Logger::initSDLogger_() {
     return false;
   }
 
-  makeTimestampedFilename_();
+  m_makeTimestampedFilename();
 
   m_sdFile = fopen(m_currentFilename, "w");
   if (!m_sdFile) {
@@ -175,7 +175,7 @@ void Logger::logToSD(const char *levelStr, const char *fmt, ...) {
   }
 }
 
-bool Logger::checkRobotConfig_() {
+bool Logger::m_checkRobotConfig() {
   MutexGuard m(m_generalMutex, TIMEOUT_MAX);
 
   bool allValid = true;
@@ -227,7 +227,7 @@ void Logger::start() {
 
   // SD init used to happen here.
   if (m_config.logToSD.load() && m_sdFile == nullptr) {
-    bool success = initSDLogger_();
+    bool success = m_initSDLogger();
     if (!success) {
       m_config.logToSD.store(false);
       m_sdLocked = true;
@@ -238,10 +238,8 @@ void Logger::start() {
   }
     
     // Check config
-    if (!checkRobotConfig_()) 
-      LOG_FATAL("At least one pointer set by setRobot(Drivetrain ref) is nullptr. Aborting!\n");
-    else
-        LOG_INFO("All pointers set by setRobot(Drivetrain ref) seem to be valid.");
+    if (!m_checkRobotConfig()) LOG_FATAL("At least one pointer set by setRobot(Drivetrain ref) is nullptr. Aborting!\n");
+    else LOG_INFO("All pointers set by setRobot(Drivetrain ref) seem to be valid.");
 
   // Create task that runs Update
   m_task = std::make_unique<pros::Task>(
@@ -299,7 +297,7 @@ void Logger::printWatches() {
     // Add watch tag and add comma separators
     finalOutput = std::string("[WATCH],") +
                   std::to_string(nowMs) + 
-                  "," + levelToString_(lvl) 
+                  "," + m_levelToString(lvl) 
                   +  "," + label + "," + valueStr;
 
     if (!w.onChange) {
@@ -313,7 +311,9 @@ void Logger::printWatches() {
     case LogLevel::ERROR: LOG_ERROR("%s", finalOutput.c_str()); break;
     default: LOG_INFO("%s", finalOutput.c_str()); break;
     }
+    return;
   }
+  std::unreachable();
 }
 
 void Logger::Update() {
