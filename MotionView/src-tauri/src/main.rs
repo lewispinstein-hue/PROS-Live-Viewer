@@ -11,7 +11,6 @@ use std::{
 };
 
 use tauri::{Manager, RunEvent, Window};
-use std::{fs, process::Stdio};
 mod settings;
 
 struct BridgeState(Mutex<Option<Child>>);
