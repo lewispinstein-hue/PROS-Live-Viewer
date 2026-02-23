@@ -39,9 +39,9 @@ const python =
   process.env.PYTHON ||
   (fs.existsSync(venvPython) ? venvPython : "python3");
 
-const pyInstallerArgs = ["-m", "PyInstaller", "-F", "--noconsole"];
+const pyInstallerArgs = ["-m", "PyInstaller", "-F"];
 if (process.platform === "win32") {
-  // pyInstallerArgs.push("--noconsole");
+  pyInstallerArgs.push("--noconsole");
 }
 pyInstallerArgs.push("-n", "motionview-py", entry);
 run(python, pyInstallerArgs);

@@ -18,6 +18,7 @@ If you do not have an existing PROS project, create one using the [`PROS Extensi
 
 ## PROS-CLI Path
 The **PROS-CLI Path** is the path to your `pros` executable file. It's what allows live streaming to open the connection between the controller and the computer.
+
 ### Finding it manually
 1. Open your code editor (VS Code or Cursor)
 2. Open a `PROS Terminal` by:

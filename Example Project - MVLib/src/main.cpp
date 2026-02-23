@@ -1,6 +1,7 @@
 #include "main.h"
 #include "mvlib/core.hpp"
 #include "mvlib/Optional/mvlib_optional_custom_odom.hpp"
+#include "pros/misc.hpp"
 
 // Creating motors and controller
 pros::Controller controller(pros::E_CONTROLLER_MASTER);
@@ -54,14 +55,14 @@ void initialize() {
 		.RightDrivetrain = mvlib::shared(right_mg)
 	});
 
-	logger.watch("Avg Temp:", mvlib::LogLevel::OFF, true, // We do not log at all normally
+	logger.watch("Avg Temp:", mvlib::LogLevel::OFF, 1000_ms, // We do not log at all normally
 		[]() { return (left_mg.get_temperature() + right_mg.get_temperature()) / 2; },
 		mvlib::LevelOverride<double>{ // Use LevelOverride to only log if overheating
 			.elevatedLevel = mvlib::LogLevel::WARN,
-			.predicate = PREDICATE(v > 50), // implicit conversion, but fine because PROS reports whole degrees anyways
+			.predicate = PREDICATE(v > 50), 
 			.label = "Overheating Drivetrain:"
 		}, "%.0f");
-		
+
 	// Start the logger
 	logger.start();
 }

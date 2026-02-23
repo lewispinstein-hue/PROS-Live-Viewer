@@ -21,7 +21,7 @@
  * @note This logger is designed for PROS projects. It expects PROS RTOS
  *       primitives (pros::Task, pros::Mutex) and an optional pose provider.
  *
- * Basic setup example:
+ * \b Example
  * @code
  * #include "mvlib/core.hpp"
  *
@@ -109,6 +109,10 @@ struct MutexGuard {
   MutexGuard(const MutexGuard &) = delete;
   MutexGuard &operator=(const MutexGuard &) = delete;
 };
+
+/// Workaround to force a static_assert to be type-dependent
+template<class>
+inline constexpr bool always_false_v = false;
 }
 /**
  * @enum LogLevel
@@ -148,7 +152,7 @@ using WatchId = uint64_t;
  *       object must outlive the shared_ptr and any Logger usage. The best way
  *       to do this is by making the object global.
  *
- * Example (global lifetime):
+ * \b Example (global lifetime):
  * @code
  * pros::MotorGroup left(...);
  * pros::MotorGroup right(...);
@@ -222,6 +226,9 @@ std::function<bool(const T &)> as_predicate(Pred &&p) {
   return std::function<bool(const T &)>(std::forward<Pred>(p));
 }
 
+/**
+ * @struct Pose struct used internally that represents the robot's x, y, and theta values.
+*/
 struct Pose {
   float x;
   float y;
@@ -241,8 +248,6 @@ struct Pose {
  * - Use watches for values you want sampled at a controlled cadence.
  *
  */
- template<class>
-inline constexpr bool always_false_v = false;
 class Logger {
 public:
   using LogLevel = ::mvlib::LogLevel;
@@ -362,7 +367,7 @@ public:
 
   /**
    * @brief Provide robot component references used by telemetry helpers.
-   * @param ref Chassis/drivetrain refs (shared_ptr).
+   * @param drivetrain drivetrain refs (shared_ptr).
    * \return True if refs were accepted (e.g., non-null and consistent).
    *
    * @note If you do not call this, pose printing and some watchdog features may
@@ -410,7 +415,7 @@ public:
    * @param fmt Optional printf-style format for numeric values (e.g. "%.2f").
    * \return WatchId that can be used to identify the watch internally.
    *
-   * Example:
+   * \b Example
    * @code
    * auto& logger = mvlib::Logger::getInstance();
    * logger.watch("Intake RPM:", mvlib::LogLevel::INFO, 
@@ -423,13 +428,12 @@ public:
    * "%.0f");
    * @endcode
    */
-  template <class Getter>
-  requires std::invocable<Getter&>
-  WatchId
-  watch(std::string label, LogLevel baseLevel, uint32_t intervalMs,
-        Getter &&getter,
-        auto ov = LevelOverride<std::decay_t<std::invoke_result_t<Getter &>>>{},
-        std::string fmt = {}) {
+  template <class Getter, class U>
+    requires std::invocable<Getter&> &&
+             std::same_as<std::decay_t<U>,
+             std::decay_t<std::invoke_result_t<Getter&>>>
+  WatchId watch(std::string label, LogLevel baseLevel, uint32_t intervalMs,
+        Getter &&getter, LevelOverride<U> ov = {}, std::string fmt = {}) {
     using T = std::decay_t<std::invoke_result_t<Getter &>>;
 
     return addWatch<T>(std::move(label), baseLevel, intervalMs,
@@ -451,42 +455,44 @@ public:
    */
   template <class Getter, class U>
     requires std::invocable<Getter&> &&
-             std::same_as<
-                std::decay_t<U>,
-                std::decay_t<std::invoke_result_t<Getter&>>>
-  WatchId watch(std::string label, LogLevel baseLevel, bool onChange, Getter&& getter,
-                LevelOverride<U> ov,
-                std::string fmt = {}) {
+             std::same_as<std::decay_t<U>,
+             std::decay_t<std::invoke_result_t<Getter&>>>
+  WatchId watch(std::string label, LogLevel baseLevel, bool onChange, 
+                Getter&& getter, LevelOverride<U> ov, std::string fmt = {}) { 
     using T = std::decay_t<std::invoke_result_t<Getter&>>;
     return addWatch<T>(std::move(label), baseLevel, 0,
                       std::forward<Getter>(getter), std::move(ov),
                       std::move(fmt), onChange);
   }
 
+  // Error catching 
   template <class Getter, class U>
-    requires std::invocable<Getter&> &&
-           (!std::same_as<
-               std::decay_t<U>,
-               std::decay_t<std::invoke_result_t<Getter&>>>)
-  WatchId watch(std::string, LogLevel, bool, Getter&&,
-                LevelOverride<U>,
-                std::string = {}) {
-    using T = std::decay_t<std::invoke_result_t<Getter&>>;
+  requires std::invocable<Getter&> &&
+           (!std::same_as<std::decay_t<U>, 
+           std::decay_t<std::invoke_result_t<Getter&>>>)
+  WatchId watch(std::string, LogLevel, uint32_t, Getter&&, LevelOverride<U>, std::string = {}) {
+    
     static_assert(always_false_v<U>,
-      "Logger::watch(...): LevelOverride<U> type mismatch.\n"
-      "U must match the getter's return type T (after decay).");
-    return {}; // unreachable
+                "\n\n\n------------------------------------------------------------------------"
+                "\nLogger::watch(...): LevelOverride<Type> type mismatch.\n"
+                "Type of LevelOverride must match the getter's return type (after decay).\n"
+                "------------------------------------------------------------------------\n\n\n");
+    return -1; 
   }
 
-  template <class Getter>
-    requires std::invocable<Getter&>
-  WatchId watch(std::string label, LogLevel baseLevel, bool onChange, Getter&& getter,
-                std::string fmt = {}) {
-    using T = std::decay_t<std::invoke_result_t<Getter&>>;
-    return watch(std::move(label), baseLevel, onChange,
-                std::forward<Getter>(getter),
-                LevelOverride<T>{},
-                std::move(fmt));
+  template <class Getter, class U>
+  requires std::invocable<Getter&> &&
+           (!std::same_as<std::decay_t<U>, 
+           std::decay_t<std::invoke_result_t<Getter&>>>)
+  WatchId watch(std::string, LogLevel, bool, Getter&&, LevelOverride<U>, std::string = {}) {
+    
+    static_assert(always_false_v<U>,
+                "\n\n\n------------------------------------------------------------------------"
+                "\nLogger::watch(...): LevelOverride<Type> type mismatch.\n"
+                "Type of LevelOverride must match the getter's return type (after decay).\n"
+                "------------------------------------------------------------------------\n\n\n");
+
+    return -1; 
   }
 
 private:
@@ -526,7 +532,7 @@ private:
     std::string fmt;                    ///< @brief Optional numeric format string.
 
     bool onChange = false;             ///< @brief If true, prints only when value changes.
-    std::optional<std::string> lastValue = std::nullopt;; ///< @brief Last rendered value (for onChange).
+    std::optional<std::string> lastValue = std::nullopt; ///< @brief Last rendered value (for onChange).
 
     /// @brief Computes (level, rendered string) for the current sample.
     std::function<std::tuple<LogLevel, std::string, std::string>()> eval;
@@ -686,5 +692,18 @@ private:
   // Position getters
   std::function<std::optional<Pose>()> m_getPose = nullptr;
 };
-
 } // namespace mvlib
+
+/**
+ * @brief Operator for .watch() intervalMs. Allows number_ms instead of uint32_t{number}
+ *
+ * \return explicit uint32_t casted version of the input number
+ *
+ * \b Example
+ * @code{.cpp}
+ * logger.watch("foo", mvlib::LogLevel::INFO, 100_ms, ...);
+ * @endcode
+*/
+constexpr uint32_t operator""_ms(unsigned long long int ms) {
+    return static_cast<uint32_t>(ms);
+}

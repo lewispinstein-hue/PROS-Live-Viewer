@@ -88,10 +88,11 @@ auto& logger = mvlib::Logger::getInstance();
 
 // Battery voltage
 logger.watch("Battery Percentage:", mvlib::LogLevel::INFO, true, // Instead of logging every 1000ms, we log every time the battery level changes.
-  [&]() { return pros::battery::get_voltage(); });
+  [&]() { return pros::battery::get_voltage(); },
+  mvlib::LevelOverride<int32_t>{}, "%d");
 
 // Drivetrain temperature (averaged)
-logger.watch("Avg Temp:", mvlib::LogLevel::INFO, uint32_t{1000}, 
+logger.watch("Avg Temp:", mvlib::LogLevel::INFO, 1000_ms, 
     [&]() { return (left_mg.get_temperature() + right_mg.get_temperature()) / 2; }, 
     mvlib::LevelOverride<double>{
     .elevatedLevel = mvlib::LogLevel::WARN,
@@ -99,12 +100,12 @@ logger.watch("Avg Temp:", mvlib::LogLevel::INFO, uint32_t{1000},
 }, "%0f"); // Print the temperature to 0 decimals.
 
 // Flywheel RPM
-logger.watch("Flywheel RPM:", mvlib::LogLevel::INFO, uint32_t{1000}, // For an always changing event like this, prevent spam and log periodically.
+logger.watch("Flywheel RPM:", mvlib::LogLevel::INFO, 1000_ms, // For an always changing event like this, prevent spam and log periodically.
   [&]() { return flywheel.get_actual_velocity(); },
   mvlib::LevelOverride<double>{}, "%.1f"); // No level override, and print with 1 decimal
 
 // Intake current (detect jams)
-logger.watch("Intake Current:", mvlib::LogLevel::INFO, uint32_t{1000}, 
+logger.watch("Intake Current:", mvlib::LogLevel::INFO, 1000_ms, 
   [&]() { return intake.get_current_draw(); }, 
     mvlib::LevelOverride<int32_t>{
     .elevatedLevel = mvlib::LogLevel::WARN,
@@ -114,8 +115,8 @@ logger.watch("Intake Current:", mvlib::LogLevel::INFO, uint32_t{1000},
 
 // Auton stage (prints only when it changes)
 logger.watch("Auton Stage:", mvlib::LogLevel::INFO, true, 
-  [&]() { return autonStage; }, 
-  mvlib::LevelOverride<int>{}, "%d"); // Assuming that autonStage is an int.
+  [&]() { return (int)(autonStage); }, 
+  mvlib::LevelOverride<int>{}, "%d");
 ```
 
 MotionView will show these as a **watch list**, and the field hover will show the closest watch value at any point in the run.

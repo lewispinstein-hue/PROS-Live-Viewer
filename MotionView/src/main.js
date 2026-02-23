@@ -308,8 +308,8 @@ let planRaf = null;
 let planPlayDist = 0;
 let planLastWall = null;
 const PLAN_SPEED = 1; // units per second
-const PLAN_POINT_R = 11;
-const PLAN_OVERLAY_POINT_R = 7;
+const PLAN_POINT_R = 11; // Size of waypoint in planning mode
+const PLAN_OVERLAY_POINT_R = 7; // Size of waypoint in overlay (viewing) mode
 const PLAN_THETA_HANDLE_R = 6; // Radius of theta handle
 const PLAN_THETA_HANDLE_OFFSET = 25;
 let PLAN_MARKER_MAX_IN = 3; // Max size of waypoint marker
@@ -2346,6 +2346,7 @@ function updateFloatingInfo(pose, idx) {
     // Clicking the readout jumps exactly to that waypoint
     clickable.style.cursor = "pointer";
     clickable.onclick = () => {
+      if (playing) pause();
       playTimeMs = watch.t;
       selectedIndex = findFloorIndexByTime(watch.t);
       updatePoseReadout();
@@ -5395,6 +5396,10 @@ btnClearField?.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
+  const mouseTag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+  const isTypingTarget = (mouseTag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable));
+  if (isTypingTarget && e.target !== liveWinEl) return;
+
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
     if (e.key === '1') {
       e.preventDefault();

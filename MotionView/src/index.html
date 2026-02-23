@@ -12,10 +12,26 @@
   <input id="file" type="file" accept=".json" style="display:none" />
   <input id="robotImageFile" type="file" accept="image/*" style="display:none" />
   <div class="topBarLeft">
-    <button id="btnFit" class="iconBtn" title="Maximize field (square)">⤢</button>
-    <button id="btnSettings" class="iconBtn" title="Settings">⚙️</button>
-    <button class="iconBtn pillAction" id="btnClearField" style="font-size: 12px" title="Clear field">❌</button>
-    <button id="btnHelp" class="iconBtn" title="Help">?</button>
+    <button id="btnFit" class="iconBtn" title="Maximize field (square)">
+      <svg width="12" height="12">
+        <use href="assets/svg/icons.svg#icon-fit" style="color: #ffffff"></use>
+      </svg>
+    </button>
+    <button id="btnSettings" class="iconBtn" title="Settings">
+      <svg width="18" height="18">
+        <use href="assets/svg/icons.svg#icon-settings" style="color: #ffffff"></use>
+      </svg>
+    </button>
+    <button class="iconBtn pillAction" id="btnClearField" style="font-size: 12px" title="Clear field">
+      <svg width="17" height="17">
+        <use href="assets/svg/icons.svg#icon-clear" style="color: #ff0000"></use>
+      </svg>
+    </button>
+    <button id="btnHelp" class="iconBtn" title="Help">
+      <svg width="20" height="20" style="color: #ffffff; vector-effect: non-scaling-stroke; stroke-width: 5px;">
+        <use href="assets/svg/icons.svg#icon-help"></use>
+      </svg>
+    </button>
     <span class="topStatus muted" id="status">Drop a viewer JSON file.</span>
   </div>
   <div class="topBarCenter">
@@ -486,7 +502,11 @@
       </div>
       <div class="section viewingOnly">
         <div class="rowline" style="gap:8px;flex-wrap:wrap">
-          <button id="btnFile" class="iconBtn" accept=".txt,.log,.json" title="Open JSON">📄</button>
+          <button id="btnFile" class="iconBtn" accept=".txt,.log,.json" title="Open JSON">
+            <svg width="22" height="22">
+              <use href="assets/svg/icons.svg#icon-fileOpen" style="color: #c8c8c8"></use>
+            </svg>
+          </button>
           <button id="btnToggleFloat" class="iconBtn" title="Toggle Info Window">📋</button>
           <button id="btnTogglePlanOverlay" class="iconBtn" title="Toggle Planning Path overlay">🧭</button>
         </div>
