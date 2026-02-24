@@ -35,12 +35,36 @@ function ensureDir(p) {
 const exeExt = process.platform === "win32" ? ".exe" : "";
 const outName = `motionview-py${exeExt}`;
 
-const venvPython = path.join(repoRoot, ".venv", "bin", "python");
+const venvPython =
+  process.platform === "win32"
+    ? path.join(repoRoot, ".venv", "Scripts", "python.exe")
+    : path.join(repoRoot, ".venv", "bin", "python");
 const python =
   process.env.PYTHON ||
-  (fs.existsSync(venvPython) ? venvPython : "python3");
+  (fs.existsSync(venvPython) ? venvPython : process.platform === "win32" ? "python" : "python3");
 
-const pyInstallerArgs = ["-m", "PyInstaller", "-F"];
+const pyInstallerArgs = [
+  "-m",
+  "PyInstaller",
+  "-F",
+  // ensure all lazy-loaded modules get bundled
+  "--collect-all",
+  "fastapi",
+  "--collect-all",
+  "starlette",
+  "--collect-all",
+  "pydantic",
+  "--collect-all",
+  "anyio",
+  "--collect-all",
+  "python_multipart",
+  "--collect-all",
+  "email_validator",
+  "--collect-all",
+  "jinja2",
+  "--collect-all",
+  "orjson",
+];
 if (process.platform === "win32") {
   pyInstallerArgs.push("--noconsole");
 }
