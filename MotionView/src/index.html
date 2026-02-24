@@ -55,7 +55,7 @@
     </div>
     <div class="chip">
       <span class="muted">Field</span>
-      <select id="fieldSelect" class="settingsSelect toolbarSelect" title="Field image Selector">
+      <select id="fieldSelect" class="settingsSelect toolbarSelect" style="width: 130px;" title="Field image Selector">
         <option value="">No field image</option>
       </select>
     </div>
@@ -149,7 +149,11 @@
       <!-- PROS Directory Section -->
       <div class="settingsSection settingsViewing settingsGroup" title="The path to your PROS Project. Used for Live Viewing only">
         <div class="settingsGroupHeader">
-          <div class="settingsGroupIcon">📁</div>
+          <div class="settingsGroupIcon">
+            <svg width="40" height="40" style="color: #ffffff; vector-effect: non-scaling-stroke; stroke-width: 5px;">
+              <use href="assets/svg/icons.svg#icon-stgProsDir"></use>
+            </svg>
+          </div>
           <div class="settingsGroupTitle">PROS Directory</div>
         </div>
         <div class="settingsGroupBody">
@@ -189,7 +193,11 @@
       <!-- Robot Image Section -->
       <div class="settingsSection settingsViewing settingsGroup" title="Upload an image of your own robot to be used instead of the defualt box">
         <div class="settingsGroupHeader">
-          <div class="settingsGroupIcon">🤖</div>
+          <div class="settingsGroupIcon">
+            <svg width="40" height="40" style="color: #ffffff; vector-effect: non-scaling-stroke; stroke-width: 5px;">
+              <use href="assets/svg/icons.svg#icon-stgRobot"></use>
+            </svg>
+          </div>
           <div class="settingsGroupTitle">Robot Image</div>
         </div>
         <div class="settingsGroupBody">
@@ -314,7 +322,7 @@
         </div>
       </div>
 
-      <div class="divider settingsPlanning" style="margin:10px 0;"></div>
+      <div class="divider settingsViewing" style="margin:10px 0;"></div>
 
       <!-- Developer Section -->
       <div class="settingsSection settingsViewing settingsGroup" title="Advanced debug tools for troubleshooting livestreaming issues">
@@ -335,7 +343,11 @@
       <!-- Planning Section -->
       <div class="settingsSection settingsPlanning settingsGroup">
         <div class="settingsGroupHeader">
-          <div class="settingsGroupIcon">🧭</div>
+          <div class="settingsGroupIcon">
+            <svg width="18" height="18">
+              <use href="assets/svg/icons.svg#icon-planOverlay" style="color: #ffffff"></use>
+            </svg>
+          </div>
           <div class="settingsGroupTitle">Planning</div>
         </div>
         <div class="settingsGroupBody">
@@ -353,7 +365,7 @@
               </select>
             </div>
             <div>
-              <label class="fieldLabel">Theta snap (deg)</label>
+              <label class="fieldLabel">Theta snap °</label>
               <select id="settingsPlanThetaSnapStep" class="settingsSelect">
                 <option value="0" selected>off</option>
                 <option value="1">1</option>
@@ -440,7 +452,7 @@
 
           <div class="leftRefreshChip" title="Refresh + interval">
             <button class="leftRefreshBtn" id="btnLeftRefresh" type="button">Refresh</button>
-            <select id="leftRefreshInterval" aria-label="Refresh interval">
+            <select id="leftRefreshInterval" class="settingsSelect toolbarSelect" aria-label="Refresh interval">
               <option value="0">off</option>
               <option value="100">100ms</option>
               <option value="121">121ms (MVLib HZ)</option>
@@ -455,7 +467,7 @@
       </div>
 
       <div class="leftBody">
-        <textarea id="liveWin" class="monoText" readonly wrap="soft" spellcheck="false" aria-label="Live window"></textarea>
+        <div id="liveWin" class="monoText" role="log" aria-live="polite" aria-label="Live window"></div>
       </div>
     </div>
 
@@ -494,7 +506,7 @@
               <input id="planSelY" type="text" inputmode="decimal" />
             </div>
             <div>
-              <label>θ (deg)</label>
+              <label>θ°</label>
               <input id="planSelTheta" type="text" inputmode="decimal" />
             </div>
           </div>
@@ -507,8 +519,16 @@
               <use href="assets/svg/icons.svg#icon-fileOpen" style="color: #c8c8c8"></use>
             </svg>
           </button>
-          <button id="btnToggleFloat" class="iconBtn" title="Toggle Info Window">📋</button>
-          <button id="btnTogglePlanOverlay" class="iconBtn" title="Toggle Planning Path overlay">🧭</button>
+          <button id="btnToggleFloat" class="iconBtn" title="Toggle Info Window">
+            <svg width="18" height="18">
+              <use href="assets/svg/icons.svg#icon-floatingWin" style="color: #ffffff"></use>
+            </svg>
+          </button>
+          <button id="btnTogglePlanOverlay" class="iconBtn" title="Toggle Planning Path overlay">
+            <svg width="18" height="18">
+              <use href="assets/svg/icons.svg#icon-planOverlay" style="color: #ffffff"></use>
+            </svg>
+          </button>
         </div>
       </div>
       <div class="section viewingOnly">

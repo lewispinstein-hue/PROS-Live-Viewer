@@ -59,7 +59,7 @@ fn resolve_bridge_bin(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBu
     {
         roots.push(res_root);
     }
-    if let Ok(mut exe_dir) = std::env::current_exe().and_then(|p| {
+    if let Ok(exe_dir) = std::env::current_exe().and_then(|p| {
         p.parent()
             .map(|p| p.to_path_buf())
             .ok_or(std::io::Error::new(std::io::ErrorKind::Other, "no exe parent"))
@@ -252,7 +252,7 @@ fn spawn_bridge(app: &tauri::AppHandle, port: u16) -> Result<std::process::Child
 
     let ts = format_log_ts();
     let log_path = log_dir.join(format!("{ts}.log"));
-
+    println!("LOGFILE: {:?}", log_path);
     // Open the log file
     let log = std::fs::OpenOptions::new()
         .create(true)

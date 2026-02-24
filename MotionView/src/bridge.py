@@ -307,11 +307,13 @@ async def broadcast(line: str):
     line = strip_ansi(line)
     if "resolve_v5_port - No v5 ports were found" in line:
         line = "No v5 devices were found."
-    elif (
-        "Sentry is attempting to send" in line
-        or "Waiting up to" in line
-        or "Press Ctrl-C to quit" in line
-    ):
+    elif "You must be in a PROS project directory" in line:
+        line = "The PROS Path selected is not inside of a PROS Project."
+    elif "Couldn't find the response header in the device response after" in line:
+        line = "Connected device disconnected."
+    elif ("Press Ctrl" in line
+        or "Sentry is attempting to send" in line
+        or "Waiting up to" in line):
         return
 
     async with _clients_lock:

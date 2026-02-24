@@ -72,7 +72,6 @@ const btnHelp = document.getElementById('btnHelp');
 const btnLeftStop = document.getElementById('btnLeftStop');
 const btnLeftConnect = document.getElementById('btnLeftConnect');
 const btnLeftRefresh = document.getElementById('btnLeftRefresh');
-const liveWin = document.getElementById('liveWin');
 const btnTogglePlanOverlay = document.getElementById('btnTogglePlanOverlay');
 const helpModal = document.getElementById('helpModal');
 const btnHelpClose = document.getElementById('btnHelpClose');
@@ -181,8 +180,8 @@ let backendReadyAt = 0;
 
 // --- FIELD IMAGES ---
 const FIELD_IMAGES = [
-  { key: "./assets/match_field_2025-2026_pushback.png", label: "Match Field" },
-  { key: "./assets/skills_field_2025-2026_pushback.png", label: "Skills Field" },
+  { key: "./assets/match_field_2025-2026_pushback.png", label: "Match Field (V5 Pushback)" },
+  { key: "./assets/skills_field_2025-2026_pushback.png", label: "Skills Field (V5 Pushback)" },
 ];
 
 // Default field image
@@ -2484,7 +2483,10 @@ function updateFieldLayout(preserveBounds=false) {
 function resetFieldPosition() {
   resetView();
   updateFieldLayout(false); // sets full-field bounds + square layout
-  btnFit.textContent = '⤢';
+  btnFit.innerHTML = `
+  <svg width="12" height="12">
+    <use href="assets/svg/icons.svg#icon-fit" style="color: #ffffff"></use>
+  </svg>`;
   btnFit.title = 'Recenter field (square)';
 }
 
@@ -3227,6 +3229,7 @@ let livePendingLines = [];
 let livePendingConsumed = 0; // index into livePendingLines
 let liveAppendQueue = [];
 let liveAppendScheduled = false;
+let liveWinRaw = "";
 
 // Track how much we've already integrated into rawPoses/watches
 let liveLastPoseT = null; // last pose timestamp integrated
@@ -3308,20 +3311,22 @@ function flushLiveAppend() {
   const nearBottom =
     (liveWinEl.scrollTop + liveWinEl.clientHeight >= liveWinEl.scrollHeight - 12);
 
-  liveWinEl.value += liveAppendQueue.join("");
+  liveWinRaw += liveAppendQueue.join("");
   liveAppendQueue = [];
 
   // keep it responsive (basic cap)
   const MAX_CHARS = 25000;
-  if (liveWinEl.value.length > MAX_CHARS) {
-    liveWinEl.value = liveWinEl.value.slice(liveWinEl.value.length - MAX_CHARS);
+  if (liveWinRaw.length > MAX_CHARS) {
+    liveWinRaw = liveWinRaw.slice(liveWinRaw.length - MAX_CHARS);
   }
   // keep last ~2000 lines for perf
   const MAX_LINES = 2000;
-  const lines = liveWinEl.value.split("\n");
+  const lines = liveWinRaw.split("\n");
   if (lines.length > MAX_LINES) {
-    liveWinEl.value = lines.slice(lines.length - MAX_LINES).join("\n");
+    liveWinRaw = lines.slice(lines.length - MAX_LINES).join("\n");
   }
+
+  liveWinEl.innerHTML = ansiToHtml(liveWinRaw);
 
   // only autoscroll if user was already at bottom
   if (nearBottom) liveWinEl.scrollTop = liveWinEl.scrollHeight;
@@ -3335,6 +3340,67 @@ function liveAppendLine(s) {
     liveAppendScheduled = true;
     requestAnimationFrame(flushLiveAppend);
   }
+}
+
+function mvEscapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function ansiToHtml(text) {
+  const fg = {
+    30: "#000000", 31: "#d9534f", 32: "#5cb85c", 33: "#f0ad4e",
+    34: "#5bc0de", 35: "#c678dd", 36: "#46b8da", 37: "#e9eef7",
+    90: "#8a8f98", 91: "#ff6b6b", 92: "#6dd96c", 93: "#ffd66b",
+    94: "#63b3ff", 95: "#e09bff", 96: "#76e4f7", 97: "#f8fbff",
+  };
+  const bg = {
+    40: "#000000", 41: "#d9534f", 42: "#5cb85c", 43: "#f0ad4e",
+    44: "#5bc0de", 45: "#c678dd", 46: "#46b8da", 47: "#e9eef7",
+    100: "#2b2d31", 101: "#ff6b6b", 102: "#6dd96c", 103: "#ffd66b",
+    104: "#63b3ff", 105: "#e09bff", 106: "#76e4f7", 107: "#f8fbff",
+  };
+
+  let cur = { fg: null, bg: null, bold: false };
+  let out = "";
+  let last = 0;
+  const re = /\u001b\[(\d+(?:;\d+)*)m/g;
+
+  function span(txt, style) {
+    if (!txt) return "";
+    const body = mvEscapeHtml(txt).replace(/\n/g, "<br>");
+    const css = [];
+    if (style.bold) css.push("font-weight:700");
+    if (style.fg) css.push(`color:${style.fg}`);
+    if (style.bg) css.push(`background-color:${style.bg}`);
+    if (!css.length) return body;
+    return `<span style="${css.join(";")}">${body}</span>`;
+  }
+
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const chunk = text.slice(last, m.index);
+    out += span(chunk, cur);
+    last = re.lastIndex;
+    const codes = m[1].split(";").map((n) => Number(n) || 0);
+    for (const c of codes) {
+      if (c === 0) { cur = { fg: null, bg: null, bold: false }; continue; }
+      if (c === 1) { cur.bold = true; continue; }
+      if (fg[c]) { cur.fg = fg[c]; continue; }
+      if (bg[c]) { cur.bg = bg[c]; continue; }
+    }
+  }
+  out += span(text.slice(last), cur);
+  return out;
+}
+
+function resetLiveWin() {
+  liveWinRaw = "";
+  if (liveWinEl) liveWinEl.innerHTML = "";
 }
 
 function stripToTag(line) {
@@ -3444,11 +3510,13 @@ async function apiPost(path, timeoutMs = 5000) {
 
 async function connectLeft() {
   dbgLive("connectLeft: begin");
-  if (prosDirInput && prosDirInput.value && prosDirInput.value.trim()) {
+  if (prosDirInput && prosDirInput.value) {
     await updateProsDir(prosDirInput.value);
   }
+  if (!prosDirValid || !prosExeValid) refreshWS(); // Only force refresh if not working
+
   if (!prosDirValid) {
-    liveAppendLine('[UI] Cannot connect: PROS project directory is not set, invalid, or cannot be validated. Set it in Settings → PROS Directory. Try restarting the application.');
+    liveAppendLine('Something went wrong. Try restarting the application or waiting.');
     setStatus('Cannot connect: set a valid PROS directory in Settings first.');
     return;
   }
@@ -3485,9 +3553,9 @@ async function connectLeft() {
         livePendingConsumed = Math.max(0, livePendingConsumed - drop);
       }
     }
-    if (trimmed) { const rawStr = "🟢 " + raw}
-    else { const rawStr = "🔴 " + raw }
-    liveAppendLine(rawStr); // Show raw
+
+    if (trimmed) { liveAppendLine("\x1b[32m|\x1b[0m " + raw); } // Attach green for processed
+    else         { liveAppendLine("\x1b[31m|\x1b[0m " + raw); } // Red if not
   });
 
   leftWs.addEventListener("close", () => {
@@ -4471,8 +4539,7 @@ function openSettings() {
   if (prosDirInput && prosDirInput.value && prosDirInput.value.trim()) {
     updateProsDir(prosDirInput.value);
   }
-  if (appMode === "viewing")
-    refreshWS();
+
   // Update robot image controls visibility
   if (settingsRobotImgControls) {
     settingsRobotImgControls.hidden = !(robotImageEnabled && robotImgOk);
@@ -4498,7 +4565,6 @@ function closeSettings() {
   } catch (e) {
     console.error('Error syncing settings:', e);
   }
-  refreshWS();
   settingsModal.setAttribute('hidden', '');
   settingsModal.style.display = 'none'; // Force hide
 }
@@ -4945,6 +5011,7 @@ if (btnProsDirAuto) {
       setAutoStatus('Auto-detect failed.', 'error');
       renderAutoResults([]);
     }
+    refreshWS();
   });
 }
 
@@ -4970,6 +5037,7 @@ if (btnProsExeAuto) {
       setProsExeAutoStatus('Auto-detect failed.', 'error');
       renderProsExeAutoResults([]);
     }
+    refreshWS();
   });
 }
 
@@ -5376,7 +5444,7 @@ function clearAllPosesAndWatches() {
 
 btnLeftClear?.addEventListener('click', () => {
   clearAllPosesAndWatches();
-  liveWinEl.value = "";
+  resetLiveWin();
 });
 
 btnClearField?.addEventListener('click', () => {
@@ -5390,7 +5458,7 @@ btnClearField?.addEventListener('click', () => {
     requestDrawAll();
   } else {
     clearAllPosesAndWatches();
-    liveWinEl.value = "";
+    resetLiveWin();
   }
 });
 
@@ -5415,7 +5483,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     // Clear everything across modes
     clearAllPosesAndWatches();
-    liveWinEl.value = "";
+    resetLiveWin();
     if (appMode === "planning") pushPlanUndo();
     planWaypoints = [];
     planSetSelection([]);
@@ -5444,7 +5512,7 @@ document.addEventListener('keydown', (e) => {
       setStatus("Cleared Planned Path");
     } else {
       clearAllPosesAndWatches();
-      liveWinEl.value = "";
+      resetLiveWin();
       setStatus("Cleared Field");
     }
     return;

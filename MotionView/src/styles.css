@@ -954,14 +954,12 @@
     color: #e9eef7;
     outline: none;
     resize: none;
-
-    /* no sideways scroll + wrap long lines */
+    display: block;
     overflow-y: auto;
     overflow-x: hidden;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     word-break: break-word;
-
     line-height: 1.35;
   }
   .monoText{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
@@ -1123,6 +1121,9 @@
     padding-left: 3px !important;
     padding-top: 6px;
     padding-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition: none !important;
   }
 
