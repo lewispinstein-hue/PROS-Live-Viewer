@@ -5,8 +5,8 @@
  * @brief Optional Logger adapter for LemLib odometry.
  */
 
-#ifdef _MVLIB_OPTIONAL_USED
-#error "More than one type of Mvlib Optional include used!"
+#ifndef _MVLIB_OPTIONAL_USED
+#error More than one type of Mvlib Optional include used!
 #endif
 
 #ifndef _MVLIB_OPTIONAL_USED

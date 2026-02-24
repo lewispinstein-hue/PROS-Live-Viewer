@@ -909,7 +909,7 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
 }
 
-function toNumMaybe(v) {
+function toNumMaybe(v) {  
   if (typeof v === "number" && isFinite(v)) return v;
   if (typeof v === "string") {
     const n = Number(v.trim());
@@ -3478,16 +3478,15 @@ async function connectLeft() {
     if (trimmed) {
       livePendingLines.push(trimmed);
       // cap pending buffer to avoid unbounded growth
-      const MAX_PENDING = 20000;
+      const MAX_PENDING = 20_000;
       if (livePendingLines.length > MAX_PENDING) {
         const drop = livePendingLines.length - MAX_PENDING;
         livePendingLines.splice(0, drop);
         livePendingConsumed = Math.max(0, livePendingConsumed - drop);
       }
     }
-    let rawStr = raw;
-    if (trimmed) { rawStr = "🟢 " + raw}
-    else { rawStr = "🔴 " + raw }
+    if (trimmed) { const rawStr = "🟢 " + raw}
+    else { const rawStr = "🔴 " + raw }
     liveAppendLine(rawStr); // Show raw
   });
 
@@ -5397,7 +5396,7 @@ btnClearField?.addEventListener('click', () => {
 
 document.addEventListener('keydown', (e) => {
   const mouseTag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
-  const isTypingTarget = (mouseTag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable));
+  const isTypingTarget = (mouseTag === "input" || mouseTag === "textarea" || (e.target && e.target.isContentEditable));
   if (isTypingTarget && e.target !== liveWinEl) return;
 
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {

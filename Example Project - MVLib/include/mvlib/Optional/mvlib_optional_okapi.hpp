@@ -6,7 +6,7 @@
  */
 
 #ifdef _MVLIB_OPTIONAL_USED
-#error "More than one type of Mvlib Optional include used!"
+#error More than one type of Mvlib Optional include used!
 #endif
 
 #ifndef _MVLIB_OPTIONAL_USED

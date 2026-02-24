@@ -21,41 +21,69 @@ fn pick_free_port() -> u16 {
 }
 
 fn resolve_bridge_bin(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
-    let mut bin_name = "motionview-py".to_string();
+    // Build candidate file names: triple-suffixed (dev) and plain (bundled).
+    let mut names: Vec<String> = Vec::new();
     if let Some(triple) = option_env!("TAURI_ENV_TARGET_TRIPLE") {
-        bin_name.push_str("-");
-        bin_name.push_str(triple);
+        names.push(format!(
+            "motionview-py-{}{}",
+            triple,
+            if cfg!(target_os = "windows") { ".exe" } else { "" }
+        ));
     }
-    if cfg!(target_os = "windows") {
-        bin_name.push_str(".exe");
-    }
+    names.push(format!(
+        "motionview-py{}",
+        if cfg!(target_os = "windows") { ".exe" } else { "" }
+    ));
 
-    let dev_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("bin")
-        .join(&bin_name);
-
-    println!("CHECKING DEV PATH: {:?}", dev_path);
-
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
-    // --- PROD FALLBACK ---
-    let prod_path = app
+    // Collect search roots in priority order:
+    // 1) Dev bin/ (when running from source)
+    // 2) Bundled Resources/bin (Tauri default for externalBin)
+    // 3) Bundled executable directory (macOS puts externalBin in Contents/MacOS)
+    // 4) Bundled executable directory + bin/ (Windows MSI often flattens)
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    roots.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin"));
+    if let Ok(res_root) = app
         .path()
-        .resolve(
-            format!("bin/{}", bin_name),
-            tauri::path::BaseDirectory::Resource,
-        )
-        .map_err(|e| {
-            tauri::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                e.to_string(),
-            ))
-        })?;
+        .resolve("", tauri::path::BaseDirectory::Resource)
+        .map(|p| p.join("bin"))
+    {
+        roots.push(res_root);
+    }
+    if let Ok(mut exe_dir) = std::env::current_exe().and_then(|p| {
+        p.parent()
+            .map(|p| p.to_path_buf())
+            .ok_or(std::io::Error::new(std::io::ErrorKind::Other, "no exe parent"))
+    }) {
+        // Where the main exe lives (e.g., Contents/MacOS or AppData/Local/MotionView/__up__)
+        roots.push(exe_dir.clone());
 
-    println!("CHECKING PROD PATH: {:?}", prod_path);
-    Ok(prod_path)
+        // A bin/ next to the exe (some installers flatten to a bin folder)
+        roots.push(exe_dir.join("bin"));
+
+        // Also look one level up, because Windows installers sometimes place
+        // sidecars beside the app root while the exe is under __up__/.
+        if let Some(parent) = exe_dir.parent() {
+            roots.push(parent.to_path_buf());
+            roots.push(parent.join("bin"));
+            roots.push(parent.join("__up__"));
+            roots.push(parent.join("__up__").join("bin"));
+        }
+    }
+
+    for root in roots {
+        for name in &names {
+            let candidate = root.join(name);
+            println!("CHECKING BIN PATH: {:?}", candidate);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err(tauri::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "bridge binary not found in dev bin/, resources/bin, exe dir, or exe dir/bin",
+    )))
 }
 
 #[cfg(unix)]

@@ -6,7 +6,7 @@
  */
 
 #ifdef _MVLIB_OPTIONAL_USED
-#error "More than one type of Mvlib Optional include used!"
+#error More than one type of Mvlib Optional include used!
 #endif
 
 #ifndef _MVLIB_OPTIONAL_USED
@@ -74,9 +74,9 @@ namespace mvlib {
 template <class Fn>
 inline void setOdom(Logger& logger, Fn&& poseGetter)
   requires std::is_same_v<std::invoke_result_t<Fn&>, std::optional<Pose>> {
-  auto getter = std::forward<Fn>(poseGetter);
+    auto getter = std::forward<Fn>(poseGetter);
 
-  logger.setPoseGetter([getter = std::move(getter)]() mutable -> std::optional<Pose> {
+    logger.setPoseGetter([getter = std::move(getter)]() mutable -> std::optional<Pose> {
     return getter();
   });
 }
