@@ -60,10 +60,10 @@ void initialize() {
   // Needed: attach your odom (in this case, LemLib)
   mvlib::setOdom(logger, &chassis);
 
-  // Required for drivetrain speed telemetry
+  // Needed for accurate speed telemetry
   logger.setRobot({
-    .LeftDrivetrain  = mvlib::shared(left_mg),
-    .RightDrivetrain = mvlib::shared(right_mg)
+    .leftDrivetrain  = &left_mg,
+    .rightDrivetrain = &right_mg
   });
 
   logger.start();
@@ -137,7 +137,7 @@ MotionView will show these as a **watch list**, and the field hover will show th
   - `onChange`: `true` prints only when the value changes (interval ignored)
 
 **How `LevelOverride` works:** it lets a watch temporarily “promote” itself when a condition is true. In the examples above, the watch stays INFO normally, but flips to WARN when the battery drops too low or the intake current spikes. MotionView will show those as more urgent watch entries. <br>
-**How to use `PREDICATE`:** By default, `PREDICATE` is limited to the return type of int32_t. This means that if you need to do decimals inside of your PREDICATE, you need to manually access `mvlib::as_predicate`. It works by using variable `v` to compare. `v` is the value of the expression from `getter`. If the expression provided in PREDICATE evaluates to `true`, then LevelOverride is activated and the label and logLevel switch to those from LevelOverride.
+**How to use `PREDICATE`:** By default, `PREDICATE` is limited to the return type of int32_t. This means that if you need to do decimals inside of your PREDICATE, you need to manually access `mvlib::asPredicate`. It works by using variable `v` to compare. `v` is the value of the expression from `getter`. If the expression provided in PREDICATE evaluates to `true`, then LevelOverride is activated and the label and logLevel switch to those from LevelOverride.
 
 > **IMPORTANT NOTE:** When using `.watch()`, the type put into LevelOverride must be the exact return type from the `Getter` function. If the types do not match, your code will NOT compile.
 

@@ -1,10 +1,18 @@
-const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
-if (!invoke) console.warn("Tauri API not available; running in browser?");
+function getInvoke() { return window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke; }
 
-const isWindowsPlatform =
-  typeof navigator === "object" && /Windows/.test(navigator.userAgent);
+function hasInvoke() { return typeof getInvoke() === "function"; }
+
+async function invoke(command, payload) {
+  const fn = getInvoke();
+  if (typeof fn !== "function") { throw new Error("Tauri invoke API is not ready"); }
+  return fn(command, payload);
+}
+
+if (!hasInvoke()) console.warn("Tauri API not available; running in browser?");
+
+const isWindowsPlatform = typeof navigator === "object" && /Windows/.test(navigator.userAgent);
+
 let windowsFullscreenState = false;
-
 async function refreshWindowsFullscreenState() {
   if (!isWindowsPlatform || !invoke) return windowsFullscreenState;
   try {
@@ -25,9 +33,7 @@ async function setWindowsFullscreenState(enable) {
   return windowsFullscreenState;
 }
 
-function toggleWindowsFullscreen() {
-  setWindowsFullscreenState(!windowsFullscreenState);
-}
+function toggleWindowsFullscreen() { setWindowsFullscreenState(!windowsFullscreenState); }
 
 if (isWindowsPlatform) {
   refreshWindowsFullscreenState();
@@ -46,6 +52,135 @@ let ORIGIN = window.__BRIDGE_ORIGIN__ ?? null;
 let WS_ORIGIN = ORIGIN ? ORIGIN.replace(/^http/, "ws") : null;
 
 const root = document.documentElement;
+
+const posthog = (() => {
+  const enabled = () => hasInvoke();
+  const safeInvoke = async (command, payload = {}) => {
+    const tauriInvoke = getInvoke();
+    if (typeof tauriInvoke !== "function") {
+      throw new Error("Tauri invoke API is not ready");
+    }
+    try {
+      await tauriInvoke(command, payload);
+    } catch (err) {
+      console.warn("PostHog telemetry failed:", err);
+      throw err;
+    }
+  };
+
+  const buildRequest = (base, properties) => {
+    const request = { ...base };
+    if (properties && Object.keys(properties).length > 0) {
+      request.properties = properties;
+    }
+    return request;
+  };
+
+  return {
+    enabled,
+    capture(event, properties = {}, extras = {}) {
+      const request = buildRequest({ event, ...extras }, properties);
+      console.log("PostHog capture:", request);
+      return safeInvoke("plugin:posthog|capture", { request });
+    },
+    identify(distinctId, properties) {
+      const request = buildRequest({ distinctId }, properties);
+      return safeInvoke("plugin:posthog|identify", { request });
+    },
+    alias(aliasValue, distinctId) {
+      const request = { alias: aliasValue };
+      if (distinctId) request.distinctId = distinctId;
+      return safeInvoke("plugin:posthog|alias", { request });
+    },
+  };
+})();
+
+async function withRetry(fn, attempts = 3, baseDelayMs = 300) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (2 ** i)));
+    }
+  }
+  throw lastErr;
+}
+
+const telemetryDebounceUntilByKey = new Map();
+
+async function captureTelemetry(event, properties = {}, opts = {}) {
+  const debounceMs = Number(opts.debounceMs || 0);
+  const debounceKey = opts.debounceKey || event;
+  if (!posthog.enabled()) return false;
+
+  if (debounceMs > 0) {
+    const now = Date.now();
+    const until = telemetryDebounceUntilByKey.get(debounceKey) || 0;
+    if (now < until) return false;
+    telemetryDebounceUntilByKey.set(debounceKey, now + debounceMs);
+  }
+
+  try {
+    await withRetry(() => posthog.capture(event, properties));
+    return true;
+  } catch (err) {
+    setStatus(`Telemetry capture failed for ${event}: ${err.message}`, false);
+    console.warn(`Telemetry capture failed for ${event}:`, err);
+    return false;
+  }
+}
+
+function getPosthogDistinctId() {
+  try {
+    const storage = window.localStorage;
+    let id = storage?.getItem(POSTHOG_INSTALL_KEY);
+    if (id) return id;
+    if (!crypto?.randomUUID) {
+      id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    } else id = crypto.randomUUID();
+    
+    storage?.setItem(POSTHOG_INSTALL_KEY, id);
+    return id;
+  } catch (err) {
+    console.warn("PostHog: unable to persist distinct ID", err);
+    return null;
+  }
+}
+
+const { getVersion } = window.__TAURI__.app;
+const APP_VERSION = await getVersion();
+
+async function initPosthogTelemetry() {
+  if (!posthog.enabled()) return;
+  const distinctId = getPosthogDistinctId();
+  try {
+    let systemInfo = null;
+    try {
+      systemInfo = await invoke("get_system_info");
+    } catch (err) {
+      console.warn("Failed to load system info from backend:", err);
+    }
+    if (distinctId) {
+      await withRetry(() => posthog.identify(distinctId));
+    }
+    await captureTelemetry("app_loaded", {
+      version: APP_VERSION,
+      OS: systemInfo?.os ?? "unknown",
+      arch: systemInfo?.arch ?? "unknown",
+      browser: navigator.userAgent,
+      plan_saved: planWaypoints.length > 0,
+      plan_points: planWaypoints.length,
+    });
+    console.log("Telemetry initialized and event sent.");
+  } catch (err) {
+    console.error("PostHog failed to initialize:", err);
+  }
+}
+
+window.posthog = posthog;
 // Live streaming state shared across handlers (avoids TDZ issues)
 window.__live = window.__live || { connected: false, streaming: false };
 
@@ -1779,7 +1914,7 @@ function renderPoseList() {
   poseCount.textContent = `${rawPoses.length}`;
   const frag = document.createDocumentFragment();
   const maxItems = rawPoses.length; // keep simple
-  for (let i=0; i<maxItems; i++) {
+  for (let i = 0; i < maxItems; i++) {
     const p = rawPoses[i];
     const t = (typeof p.t === "number") ? Math.round(p.t) : "—";
     const pi = poseToInches(p);
@@ -1789,7 +1924,7 @@ function renderPoseList() {
     div.dataset.idx = String(i);
     div.innerHTML = `<div style="display:flex;justify-content:space-between;gap:10px">
       <div style="font-weight:800">#${i+1}</div>
-      <div class="muted">${t}ms</div>
+      <div class="muted">${fmtNum(t / 1000)}s</div>
     </div>
     <div class="sub">${escapeHtml(poseSummary)}</div>`;
     div.addEventListener('pointerdown', (ev) => {

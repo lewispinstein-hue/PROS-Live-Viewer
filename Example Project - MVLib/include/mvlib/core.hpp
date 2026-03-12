@@ -49,6 +49,7 @@
 #include <optional>
 #include <atomic>
 #include <optional>
+#include <sys/_intsup.h>
 #include <utility>
 
 #define _LOGGER_CORE
@@ -103,26 +104,26 @@ namespace mvlib {
   mvlib::Logger::getInstance().logMessage(                                     \
       mvlib::LogLevel::FATAL, fmt, ##__VA_ARGS__)
 
-#else
+#else // OkApi sometimes has LOG macros, so prevent redefinition
 #define MVLIB_LOGS_REDEFINED
 
-#define MVLIB_LOG_DEBUG(fmt, ...)                                                    \
+#define MVLIB_LOG_DEBUG(fmt, ...)                                              \
   mvlib::Logger::getInstance().logMessage(                                     \
       mvlib::LogLevel::DEBUG, fmt, ##__VA_ARGS__)
 
-#define MVLIB_LOG_INFO(fmt, ...)                                                     \
+#define MVLIB_LOG_INFO(fmt, ...)                                               \
   mvlib::Logger::getInstance().logMessage(                                     \
       mvlib::LogLevel::INFO, fmt, ##__VA_ARGS__)
 
-#define MVLIB_LOG_WARN(fmt, ...)                                                     \
+#define MVLIB_LOG_WARN(fmt, ...)                                               \
   mvlib::Logger::getInstance().logMessage(                                     \
       mvlib::LogLevel::WARN, fmt, ##__VA_ARGS__)
 
-#define MVLIB_LOG_ERROR(fmt, ...)                                                    \
+#define MVLIB_LOG_ERROR(fmt, ...)                                              \
   mvlib::Logger::getInstance().logMessage(                                     \
       mvlib::LogLevel::ERROR, fmt, ##__VA_ARGS__)
 
-#define MVLIB_LOG_FATAL(fmt, ...)                                                    \
+#define MVLIB_LOG_FATAL(fmt, ...)                                              \
   mvlib::Logger::getInstance().logMessage(                                     \
       mvlib::LogLevel::FATAL, fmt, ##__VA_ARGS__)
 #endif
@@ -151,16 +152,16 @@ template<class>
 inline constexpr bool always_false_v = false;
 
 #if __cplusplus >= 202302L
-    #include <utility>
-    #define UNREACHABLE() std::unreachable()
+  #include <utility>
+  #define UNREACHABLE() std::unreachable()
 #elif defined(__GNUC__) || defined(__clang__)
     #define UNREACHABLE() __builtin_unreachable()
 #elif defined(_MSC_VER)
-    #define UNREACHABLE() __assume(false)
+  #define UNREACHABLE() __assume(false)
 #else
-    #define UNREACHABLE() do {} while () // Fallback
+  #define UNREACHABLE()
 #endif
-}
+} // namespace
 
 /**
  * @enum LogLevel
@@ -176,63 +177,12 @@ enum class LogLevel {
   WARN,     /// Used for logs still not dangerous, but that should stand out
   ERROR,    /// Used when something has gone wrong.
   FATAL     /// Used only for serious failures; often precedes a force stop.
-}; 
-
-/// @brief SD file flush interval (ms). At 1000ms (default), SD card flushes out of RAM every 1 second.
-constexpr uint32_t SD_FLUSH_INTERVAL_MS = 1000;
+};
 
 // ---------- Generic variable watches ----------
 
 /// @brief Identifier for a registered watch entry.
 using WatchId = uint64_t;
-
-/**
- * @brief Wrap a global/static object pointer into a non-owning std::shared_ptr.
- *
- * Where to use it:
- * - For Logger::setRobot(), which expects std::shared_ptr references.
- *
- * When to use it:
- * - When you have an object with static/storage lifetime and you want to pass it
- *   into the logger without transferring ownership.
- *
- * @note This does NOT take ownership. The deleter is a no-op. The referenced
- *       object must outlive the shared_ptr and any Logger usage. The best way
- *       to do this is by making the object global.
- *
- * \b Example (global lifetime):
- * @code
- * pros::MotorGroup left(...);
- * pros::MotorGroup right(...);
- *
- * void initialize() {
- *   auto& logger = mvlib::Logger::getInstance();
- *   logger.setRobot({
- *     .LeftDrivetrain = mvlib::shared(left),
- *     .RightDrivetrain = mvlib::shared(right)
- *   });
- * }
- * @endcode
- */
- 
-template <class T>
-std::shared_ptr<std::remove_reference_t<T>> shared(T& obj) {
-  using U = std::remove_reference_t<T>;
-  return std::shared_ptr<U>(std::addressof(obj), [](U*) {}); // no-op deleter
-}
-
-/**
- * @def PREDICATE
- * @brief Helper for building a LevelOverride predicate with an int input.
- *
- * Where to use it:
- * - When using watch() with integer-like values and you want a concise predicate.
- *
- * @note This macro is limited to predicates over int32_t. For other types, use
- *       mvlib::as_predicate<Typename>(expression) directly.
- */
-#define PREDICATE(func) \
-mvlib::as_predicate<int32_t>([](int32_t v) { return func; })
 
 /**
  * @struct LevelOverride
@@ -245,9 +195,7 @@ mvlib::as_predicate<int32_t>([](int32_t v) { return func; })
  * - In watches where you want "normal" printing at INFO, but highlight abnormal
  *   values at WARN/ERROR.
  */
-template <class T> struct LevelOverride {
-  using value_type = T;
-
+template<class T> struct LevelOverride {
   /// @brief Level used when predicate returns true.
   LogLevel elevatedLevel = LogLevel::WARN;
 
@@ -257,6 +205,19 @@ template <class T> struct LevelOverride {
   /// @brief An optional label that prints instead of the regular when the predicate is true.
   std::string label;
 };
+
+/**
+ * @def PREDICATE
+ * @brief Helper for building a LevelOverride predicate with an int input.
+ *
+ * Where to use it:
+ * - When using watch() with integer-like values and you want a concise predicate.
+ *
+ * @note This macro is limited to predicates over int32_t. For other types, use
+ *       mvlib::asPredicate<Typename>(expression) directly.
+ */
+#define PREDICATE(func) \
+mvlib::asPredicate<int32_t>([](int32_t v) { return func; })
 
 /**
  * @brief Convert an arbitrary predicate callable into std::function<bool(const T&)>.
@@ -269,9 +230,9 @@ template <class T> struct LevelOverride {
  * @param p Predicate callable.
  * \return A std::function wrapper calling p(const T&).
  */
-template <class T, class Pred>
-std::function<bool(const T &)> as_predicate(Pred &&p) {
-  return std::function<bool(const T &)>(std::forward<Pred>(p));
+template<class T, class Pred>
+std::function<bool(const T&)> asPredicate(Pred &&p) {
+  return std::function<bool(const T&)>(std::forward<Pred>(p));
 }
 
 /**
@@ -307,9 +268,9 @@ public:
    * @note Most fields are atomic so they can be toggled while running.
    */
   struct loggerConfig {
-    std::atomic<bool> logToTerminal{true};               ///< @brief Print logs to the terminal.
-    std::atomic<bool> logToSD{true};                     ///< @brief Write logs to SD (locked after logger start).
-    std::atomic<bool> printWatches{true};                ///< @brief Print registered watches.
+    std::atomic<bool> logToTerminal{true};  ///< @brief Print logs to the terminal.
+    std::atomic<bool> logToSD{true};        ///< @brief Write logs to SD (locked after logger start).
+    std::atomic<bool> printWatches{true};   ///< @brief Print registered watches.
   };
 
   /**
@@ -317,9 +278,9 @@ public:
    * @brief References to robot components used by telemetry helpers.
    */
   struct Drivetrain {
-    std::shared_ptr<pros::MotorGroup> LeftDrivetrain;   ///< @brief Left drivetrain motors for thermal scanning.
-    std::shared_ptr<pros::MotorGroup> RightDrivetrain;  ///< @brief Right drivetrain motors for thermal scanning.
-  };
+    pros::MotorGroup* leftDrivetrain;   ///< @brief Left drivetrain motors for velocity.
+    pros::MotorGroup* rightDrivetrain;  ///< @brief Right drivetrain motors for velocity.
+  }; 
 
   /**
    * @brief Access the singleton logger instance.
@@ -345,7 +306,7 @@ public:
   void pause();
 
   /// @brief Resume after pause().
-  void unpause();
+  void resume();
 
   /**
    * @brief Get a compact status bitmask / state code.
@@ -370,7 +331,7 @@ public:
    * @brief Enable/disable SD logging.
    *
    * @note Many implementations lock SD logging after start() to avoid file
-   *       lifecycle issues. If that applies, calls after start() may no-op.
+   *       lifecycle issues. Calls after start() may fail.
    */
   void setLogToSD(bool v);
 
@@ -415,11 +376,11 @@ public:
 
   /**
    * @brief Provide robot component references used by telemetry helpers.
-   * @param drivetrain drivetrain refs (shared_ptr).
+   * @param drivetrain drivetrain refs.
    * \return True if refs were accepted (e.g., non-null and consistent).
    *
-   * @note If you do not call this, pose printing and some watchdog features may
-   *       be disabled or will no-op.
+   * @note If you do not call this, drivetrain speed will be approximated from 
+   *       pose. This is not recommended.
    */
   bool setRobot(Drivetrain drivetrain);
 
@@ -428,10 +389,13 @@ public:
   // ------------------------------------------------------------------------
 
   /**
-   * @brief Emit a formatted log message.
+   * @brief Emit a formatted log message. Automatically handles 
+   *        terminal/SD logging.
    *
    * @param level Log severity.
    * @param fmt printf-style format string.
+   * 
+   * @note Messages are truncated to 1024 bytes.
    */
   void logMessage(LogLevel level, const char *fmt, ...);
 
@@ -507,6 +471,7 @@ public:
              std::decay_t<std::invoke_result_t<Getter&>>>
   WatchId watch(std::string label, LogLevel baseLevel, bool onChange, 
                 Getter&& getter, LevelOverride<U> ov, std::string fmt = {}) { 
+                  
     using T = std::decay_t<std::invoke_result_t<Getter&>>;
     return addWatch<T>(std::move(label), baseLevel, 0,
                       std::forward<Getter>(getter), std::move(ov),
@@ -515,32 +480,29 @@ public:
 
   // Error catching 
   template <class Getter, class U>
-  requires std::invocable<Getter&> &&
-           (!std::same_as<std::decay_t<U>, 
-           std::decay_t<std::invoke_result_t<Getter&>>>)
+    requires std::invocable<Getter&> &&
+            (!std::same_as<std::decay_t<U>, 
+            std::decay_t<std::invoke_result_t<Getter&>>>)
   WatchId watch(std::string, LogLevel, uint32_t, Getter&&, LevelOverride<U>, std::string = {}) {
-    
     static_assert(always_false_v<U>,
                 "\n\n\n------------------------------------------------------------------------"
                 "\nLogger::watch(...): LevelOverride<Type> type mismatch.\n"
                 "Type of LevelOverride must match the getter's return type (after decay).\n"
                 "------------------------------------------------------------------------\n\n\n");
-    return -1; 
+    return -1;
   }
 
   template <class Getter, class U>
-  requires std::invocable<Getter&> &&
-           (!std::same_as<std::decay_t<U>, 
-           std::decay_t<std::invoke_result_t<Getter&>>>)
+    requires std::invocable<Getter&> &&
+            (!std::same_as<std::decay_t<U>, 
+            std::decay_t<std::invoke_result_t<Getter&>>>)
   WatchId watch(std::string, LogLevel, bool, Getter&&, LevelOverride<U>, std::string = {}) {
-    
     static_assert(always_false_v<U>,
                 "\n\n\n------------------------------------------------------------------------"
                 "\nLogger::watch(...): LevelOverride<Type> type mismatch.\n"
                 "Type of LevelOverride must match the getter's return type (after decay).\n"
                 "------------------------------------------------------------------------\n\n\n");
-
-    return -1; 
+    return -1;
   }
 
 private:
@@ -558,7 +520,7 @@ private:
   bool m_initSDLogger();
 
   /// @brief Generate a timestamped filename into m_currentFilename.
-  void m_makeTimestampedFilename();
+  void m_makeTimestampedFile();
 
   /**
    * @brief Convert a LogLevel to a printable string.
@@ -582,7 +544,7 @@ private:
     bool onChange = false;             ///< @brief If true, prints only when value changes.
     std::optional<std::string> lastValue = std::nullopt; ///< @brief Last rendered value (for onChange).
 
-    /// @brief Computes (level, rendered string) for the current sample.
+    /// @brief Computes (level, rendered eval string, label) for the current sample.
     std::function<std::tuple<LogLevel, std::string, std::string>()> eval;
   };
 
@@ -598,9 +560,7 @@ private:
    * @brief Render a std::string as-is.
    * \return The rendered string.
    */
-  static std::string renderValue(const std::string &v, const std::string &) {
-    return v;
-  }
+  static std::string renderValue(const std::string &v, const std::string &) { return v; }
 
   /**
    * @brief Render a C-string safely.
@@ -614,9 +574,7 @@ private:
    * @brief Render a boolean as "true"/"false".
    * \return Rendered boolean string.
    */
-  static std::string renderValue(bool v, const std::string &) {
-    return v ? "true" : "false";
-  }
+  static std::string renderValue(bool v, const std::string &) { return v ? "true" : "false"; }
 
   /**
    * @brief Render arithmetic types using an optional printf-style format.
@@ -640,9 +598,7 @@ private:
     } else if constexpr (std::is_integral_v<T>) {
       (void)fmt; // ignore fmt for integrals
       return std::to_string((long long)v);
-    } else {
-      return std::string("<unrenderable>");
-    }
+    } else return std::string("<unrenderable>");
   }
 
 
@@ -663,8 +619,9 @@ private:
    * \return Assigned WatchId.
    */
   template <class T, class Getter>
-  WatchId addWatch(std::string label, LogLevel baseLevel, uint32_t intervalMs,
-                   Getter &&getter, LevelOverride<T> ov, std::string fmt,
+  WatchId addWatch(std::string label, const LogLevel baseLevel, 
+                   const uint32_t intervalMs, Getter &&getter, 
+                   LevelOverride<T> ov, std::string fmt,
                    bool onChange = false) {
     Watch w;
     w.id = m_nextId++;
@@ -681,6 +638,7 @@ private:
     const std::string fmtCopy = w.fmt;
     const std::string labelCopy = w.label;
 
+    // When w.eval is called, it returns final log level, getter eval, final label
     w.eval = [baseLevel, labelCopy, fmtCopy, g = std::move(g), 
               ov = std::move(ov)]() mutable -> 
               std::tuple<LogLevel, std::string, std::string> {
@@ -689,17 +647,14 @@ private:
 
       const bool tripped = (ov.predicate && ov.predicate(v));
 
-      LogLevel lvl = baseLevel;
-      if (tripped) lvl = ov.elevatedLevel;
+      // Log level based on predicate
+      LogLevel lvl = tripped ? ov.elevatedLevel : baseLevel;
 
-      std::string rawOut = renderValue(v, fmtCopy);
+      std::string rawOut = renderValue(v, fmtCopy); // Raw eval of getter
 
-      // Get default label
-      std::string displayOut = labelCopy;
+      // Get label based on predicate 
+      std::string displayOut = (tripped && !ov.label.empty()) ? ov.label : labelCopy;
 
-      if (tripped && !ov.label.empty()) {
-        displayOut = ov.label;
-      }
       return {lvl, std::move(rawOut), std::move(displayOut)};
     };
 
@@ -715,24 +670,31 @@ private:
   // Internal state
   // ------------------------------------------------------------------------
 
-  loggerConfig m_config{};           
+  loggerConfig m_config{};
   LogLevel m_minLogLevel = LogLevel::INFO;
 
-  pros::Mutex m_logToSdMutex;       
-  pros::Mutex m_loggerMutex;       
-  pros::Mutex m_generalMutex;      
+  pros::Mutex m_terminalMutex;
+  pros::Mutex m_sdCardMutex;
+  pros::Mutex m_mutex;
 
-  uint32_t m_lastFlush = 0;   
-  FILE *m_sdFile = nullptr;      
-  char m_currentFilename[128] = "";   
+  uint32_t m_lastFlush = 0;
+  FILE *m_sdFile = nullptr;
+  char m_currentFilename[128] = "";
   const char *date = __DATE__; // Last upload date as fallback for no RTC
-  bool m_waitForSTDin = false;        
-  bool m_started = false;
-  bool m_sdLocked = false;
-  bool m_configSet = false;
-  bool m_configValid = false;
+
+  bool m_started = false;     // Has start() been called?
+  bool m_sdLocked = false;    // Has sd card failed?
+  bool m_configSet = false;   // Has setRobot() been called?
+  bool m_configValid = false; // Is drivetrain config valid?
   
   // Polling intervals  
+
+  /**
+   * @brief SD file flush interval (ms). At 1000ms (default), 
+   *        SD card flushes out of RAM every 1 second.
+  */
+  static constexpr uint32_t SD_FLUSH_INTERVAL_MS = 1000;
+
   /**
    * @brief Controls how often mvlib polls for new data and logs it.
    *         
@@ -742,8 +704,8 @@ private:
    *       terminal and to sd card, the terminal polling rate is used.
    *
    * @warning If the polling rate is too fast, it may overwhelm the 
-   *          brain -> controller connection, which would cause the
-   *          connection to be completely dropped and stop outputting.
+   *          brain -> controller connection, which may cause the
+   *          connection to be completely dropped and cease logging.
   */
   static constexpr uint16_t terminalPollingRate = 120;
 
@@ -758,8 +720,8 @@ private:
   static constexpr uint16_t sdCardPollingRate = 80; 
 
   // Robot refs
-  std::shared_ptr<pros::MotorGroup> m_pLeftDrivetrain = nullptr; 
-  std::shared_ptr<pros::MotorGroup> m_pRightDrivetrain = nullptr; 
+  pros::MotorGroup* m_pLeftDrivetrain = nullptr; 
+  pros::MotorGroup* m_pRightDrivetrain = nullptr; 
 
   std::unique_ptr<pros::Task> m_task;
 
@@ -772,7 +734,7 @@ private:
  * @brief Operator for .watch() intervalMs. Allows number_mvMs 
  *        instead of uint32_t{number}
  *
- * \return explicit uint32_t casted version of the input number
+ * \return Explicit uint32_t casted version of the input number
  *
  * \b Example
  * @code{.cpp}
@@ -781,4 +743,33 @@ private:
 */
 constexpr uint32_t operator""_mvMs(unsigned long long int ms) {
     return static_cast<uint32_t>(ms);
+}
+
+/**
+ * @brief Operator for .watch() intervalMs. Allows number_mvS 
+ *        instead of uint32_t{number}, in seconds form
+ *
+ * \return Explicit uint32_t casted version of the input number, 
+ *         times 1000.
+ *
+ * \b Example
+ * @code{.cpp}
+ * logger.watch("foo", mvlib::LogLevel::INFO, 1.7_mvS, ...);
+ * @endcode
+*/
+constexpr uint32_t operator""_mvS(long double s) {
+    return static_cast<uint32_t>(s * 1000);
+}
+
+/** 
+ * @brief Overload for integer type. Same as mvlib::operator""_mvS, used for
+ *        non-float literals.
+ *
+ * \b Example
+ * @code{.cpp}
+ * logger.watch("foo", mvlib::LogLevel::INFO, 1_mvS, ...);
+ * @endcode
+*/
+constexpr uint32_t operator""_mvS(unsigned long long s) {
+    return static_cast<uint32_t>(s * 1000);
 }
