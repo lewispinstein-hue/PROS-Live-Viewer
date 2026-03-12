@@ -27,7 +27,7 @@ MotionView is a live visualizer for PROS robots. It turns a stream of numbers in
 
 There are two main modes: 
 ## Viewing Mode
-<p align="center">
+<p align="left">
     <img src="assets/MotionView/viewing_mode.png" alt="Icon" width="500" />
 </p>
 
@@ -47,7 +47,7 @@ Key capabilities:
 - Use play/pause, step forward/back, and fit/reset (`F`) to keep attention on the most important moments.
 
 ## Planning Mode
-<p align="center">
+<p align="left">
     <img src="assets/MotionView/planning_mode_path.png" alt="Icon" width="500" />
 </p>
 
@@ -71,9 +71,9 @@ MotionView requires nothing out of the box to load files, but some features requ
 Livestreaming lets you watch a robot's pose logger in real time without opening a saved file.
 
 Core requirements:
-1. Be connected to your robot (controller/brain) and run a `Pose logger`; for a minimal logger build see [**MVLib**](</Example Project - MVLib/README.md>).
+1. Be connected to your robot (controller/brain) and run a `Pose logger`; for a minimal logger build see [**MVLib**](</MVLib/README.md>).
 2. Settings must point to a valid `PROS Project Directory`. If you do not have robot code locally, install the PROS VS Code Extension, create a new PROS project, and MotionView will auto-detect it.
-3. MotionView autodetects `PROS-CLI`, but refer to the [Setup Guide](MotionView/SETUP_GUIDE.md) if it fails.
+3. MotionView autodetects `PROS-CLI`, but refer to the [Setup Guide](/Guides/MotionView/Setup-Livestreaming.md) if it fails.
 
 What Livestream mode gives you:
 - A live-updating field view with the current pose, heading, and speed so you can monitor motion as it happens.
