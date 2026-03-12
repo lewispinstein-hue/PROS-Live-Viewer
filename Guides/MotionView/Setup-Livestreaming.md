@@ -36,3 +36,6 @@ The **PROS-CLI Path** is the path to your `pros` executable file. It's what allo
 4. Select the best result
 5. If nothing is found, find it manually, or it may not be installed on your system:
 > Install the [`PROS Extension`](https://marketplace.visualstudio.com/items?itemName=sigbots.pros), restart the app, and `Find` again.
+
+### Why PROS?
+PROS is needed because of the terminal interface. Because `pros terminal`, run anywhere, always does the same action, it is very easy to get consistent connections and behavior using it. While it may be possible to use VEXCode (or any non-PROS platform), piping the terminal into MotionView is not easily done.

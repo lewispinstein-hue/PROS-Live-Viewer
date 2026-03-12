@@ -14,7 +14,7 @@ const isWindowsPlatform = typeof navigator === "object" && /Windows/.test(naviga
 
 let windowsFullscreenState = false;
 async function refreshWindowsFullscreenState() {
-  if (!isWindowsPlatform || !invoke) return windowsFullscreenState;
+  if (!isWindowsPlatform || !hasInvoke()) return windowsFullscreenState;
   try {
     windowsFullscreenState = await invoke("get_window_fullscreen_state");
   } catch (err) {
@@ -24,7 +24,7 @@ async function refreshWindowsFullscreenState() {
 }
 
 async function setWindowsFullscreenState(enable) {
-  if (!isWindowsPlatform || !invoke) return windowsFullscreenState;
+  if (!isWindowsPlatform || !hasInvoke()) return windowsFullscreenState;
   try {
     windowsFullscreenState = await invoke("set_windows_fullscreen", { enable });
   } catch (err) {
@@ -50,6 +50,8 @@ if (isWindowsPlatform) {
 
 let ORIGIN = window.__BRIDGE_ORIGIN__ ?? null;
 let WS_ORIGIN = ORIGIN ? ORIGIN.replace(/^http/, "ws") : null;
+
+const POSTHOG_INSTALL_KEY = "motionviewPosthogDistinctId";
 
 const root = document.documentElement;
 
@@ -231,7 +233,7 @@ const rowGrid = document.querySelector('.row');
 
 const timelineBar = document.getElementById('timelineBar');
 const timelineTop = document.getElementById('timelineTop');
-const timelineHint = document.getElementById('timelineHint');
+
 const layoutState = {
   lastLeftSidebarW: 360,
   lastRightSidebarW: 360,
@@ -250,7 +252,6 @@ function readRootCssNumber(prop, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
-// Removed: runName, runMeta, fmt (were in Config section)
 const watchList = document.getElementById('watchList');
 const watchCount = document.getElementById('watchCount');
 const secWatches = document.getElementById('secWatches');
@@ -329,6 +330,8 @@ let prosDirFromSettings = false;
 let prosExeFromSettings = false;
 let backendReady = false;
 let backendReadyAt = 0;
+let backendReadyProbeInFlight = null;
+let backendReadyLastCheckAt = 0;
 
 // --- FIELD IMAGES ---
 const FIELD_IMAGES = [
@@ -346,15 +349,14 @@ const MAX_OFFSET_THETA = 359;
 
 const WATCH_TOL_MS = 60; // Controls the ± time that determines which pose a watch attaches to
 const COLLAPSE_PX_TIMELINE = 130; // When the timeline collapses away
-const COLLAPSE_PX_SIDEBAR = 275; 
+const COLLAPSE_PX_SIDEBAR = 150; 
 const COLLAPSE_WAYPOINTLIST_PX = 5;
 
 const COLLAPSE_PX_LEFTSIDEBAR = 210; // When the left sidebar collapses away
-const DBLCLICK_COLLAPSE_LEFTSIDEBAR = true;
 const MAX_PX_LIVEWIN = 800; // Max width for left live window panel
 
 const MAX_TIMELINE_H_PX = 350; // Height at which timeline stops growing
-const MAX_SIDEBAR_W_PX = 400; // Width at which sidebar stops growing
+const MAX_SIDEBAR_W_PX = 550; // Width at which sidebar stops growing
 const MAX_PLAN_UNDO = 50;
 
 const HOVER_PIXEL_TOL = 14;
@@ -407,7 +409,7 @@ let offsetYpx = 0;
 
 // field image
 let fieldImg = null;
-// optional robot image (./robot_image.png)
+
 let robotImg = null;
 let robotImgOk = false;
 let robotImgLoadTried = false;
@@ -800,8 +802,13 @@ function planChanged(opts = {}) {
   scheduleSavedPathsSave();
 }
 
+function getThetaDelta() {
+  return (fieldRotationDeg === 90 || fieldRotationDeg === 270) ? 
+          fieldRotationDeg + 180 : fieldRotationDeg;
+}
+
 async function loadSavedPaths() {
-  if (!invoke) return;
+  if (!hasInvoke()) return;
   try {
     const saved = await invoke('read_saved_paths');
     if (!saved) return;
@@ -852,7 +859,7 @@ async function loadSavedPaths() {
 }
 
 function scheduleSavedPathsSave() {
-  if (!invoke) return;
+  if (!hasInvoke()) return;
   if (savedPathsSaveTimer) clearTimeout(savedPathsSaveTimer);
   savedPathsSaveTimer = setTimeout(async () => {
     try {
@@ -903,7 +910,7 @@ function updatePlanSelectionPanel() {
   }
   const xVal = String(fmtNum(p.x, 2));
   const yVal = String(fmtNum(p.y, 2));
-  const tVal = String(fmtNum(p.theta ?? 0, 1));
+  const tVal = String(fmtNum(planThetaDegAt(planSelected) ?? 0, 1));
   planSelXEl.value = xVal;
   planSelYEl.value = yVal;
   planSelThetaEl.value = tVal;
@@ -1104,6 +1111,11 @@ function setMode(mode) {
   renderPlanList();
   updatePlanControls();
   setPlanDist(planPlayDist);
+  void captureTelemetry("mode_changed", { 
+    version: APP_VERSION,
+     mode: appMode 
+    }, { debounceMs: 700 }
+  );
 }
 
 
@@ -1121,9 +1133,9 @@ function angLerpDeg(a, b, t) {
   return normalizeDeg(a + diff * t);
 }
 function fmtNum(v, d=2) { if (typeof v !== "number" || !isFinite(v)) return "—"; return v.toFixed(d); }
-function setStatus(msg) { statusEl.textContent = msg; console.log(`Status: ${msg}`); }
+function setStatus(msg, log=true) { statusEl.textContent = msg; if (log) console.log(`Status: ${msg}`); }
 
-function escapeHtml(s) {
+function escapeHtml(s) { 
   return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
 }
 
@@ -1323,11 +1335,29 @@ function refreshBridgeOrigin() {
   return ORIGIN;
 }
 
+async function ensureBridgeOriginReady() {
+  if (refreshBridgeOrigin()) return true;
+  if (!hasInvoke()) return false;
+  try {
+    const origin = await invoke("get_bridge_origin");
+    if (origin) {
+      ORIGIN = origin;
+      WS_ORIGIN = ORIGIN.replace(/^http/, "ws");
+      return true;
+    }
+  } catch (e) {}
+  return !!refreshBridgeOrigin();
+}
+
 async function ensureBackendReady() {
-  const origin = refreshBridgeOrigin();
-  if (!origin) return false;
+  if (!(await ensureBridgeOriginReady())) return false;
+  const origin = ORIGIN;
   const now = Date.now();
   if (backendReady && now - backendReadyAt < 2000) return true;
+  if (backendReadyProbeInFlight) return backendReadyProbeInFlight;
+  if (now - backendReadyLastCheckAt < 1000) return false;
+  backendReadyLastCheckAt = now;
+  backendReadyProbeInFlight = (async () => {
   try {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 1000);
@@ -1341,7 +1371,20 @@ async function ensureBackendReady() {
     return true;
   } catch (e) {
     return false;
+  } finally {
+    backendReadyProbeInFlight = null;
   }
+  })();
+  return backendReadyProbeInFlight;
+}
+
+async function waitForBackendReady(maxWaitMs = 8000, pollMs = 200) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    if (await ensureBackendReady()) return true;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return false;
 }
 
 function formatLogArgs(args) {
@@ -1354,7 +1397,8 @@ function formatLogArgs(args) {
 async function logToBackend(level, message, tag) {
   const origin = refreshBridgeOrigin();
   if (!origin) return;
-  if (!(await ensureBackendReady())) return;
+  // Avoid status-probe storms from console logging paths.
+  if (!backendReady) return;
   try {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 800);
@@ -1365,9 +1409,7 @@ async function logToBackend(level, message, tag) {
       signal: controller.signal,
     });
     clearTimeout(t);
-  } catch (e) {
-    // best effort
-  }
+  } catch (e) {}
 }
 
 // Mirror key console errors into the backend log for shipped apps
@@ -1509,9 +1551,8 @@ function layoutTimelineCanvas() {
   // Ensure we never clip the bottom: compute available height.
   const barH = timelineBar.getBoundingClientRect().height;
   const topH = timelineTop ? timelineTop.getBoundingClientRect().height : 0;
-  const hintH = timelineHint ? timelineHint.getBoundingClientRect().height : 0;
   const padding = 10 + 10; // rough internal padding
-  const avail = Math.max(144, barH - topH - hintH - padding);
+  const avail = Math.max(144, barH - topH - padding);
   timelineCanvas.style.height = `${avail}px`;
 }
 
@@ -1556,11 +1597,15 @@ async function loadFieldImage(filename) {
   img.onload = () => { fieldImg = img; draw(); };
   img.onerror = () => {
     fieldImg = null; 
-    draw(); 
-    if (filename == "none") return; // No field image is 'no'
+    draw();
+    if (filename == "none") return; // No field image is 'none' 
     setStatus(`Could not load field image: ${filename}`); 
   };
   img.src = filename;
+  await captureTelemetry("field_image_loaded", { 
+    version: APP_VERSION, 
+    field: filename,
+  }, { debounceMs: 1500 });
 }
 
 function loadRobotImage() {
@@ -1582,7 +1627,6 @@ function loadRobotImage() {
     if (settingsRobotImgControls) settingsRobotImgControls.hidden = true;
     draw();
   };
-  img.src = "./robot_image.png";
 }
 
 function drawFirstField() {
@@ -1854,7 +1898,7 @@ function renderWatchList() {
           <span class="pill level" style="background:${st.fill};color:${st.text}">${escapeHtml(st.name)}</span>
           <span style="font-weight:850;word-break:break-word">${escapeHtml(label)}</span>
         </div>
-        <div class="muted">${t != null ? (t + "ms") : ""}</div>
+        <div class="muted">${t != null ? (String(fmtNum(t / 1000, 2)) + "s") : "—"}</div>
       </div>
       <div class="bigValue">${escapeHtml(String(value))}</div>
     `;
@@ -1877,6 +1921,8 @@ function selectWatchMarker(marker, fromUserClick=false, clickPos=null) {
   clearTrackHover(true);
   clearTrackLock();
 
+  if (leftConnected && leftStreaming) liveAutoFollowHead = false;
+  
   const near = nearestIndexWithinTol(marker.t, WATCH_TOL_MS);
   if (near) {
     selectedIndex = near.idx;
@@ -1886,8 +1932,7 @@ function selectWatchMarker(marker, fromUserClick=false, clickPos=null) {
     setStatus(`Watch @${marker.t}ms shown via interpolation (no pose within ±${WATCH_TOL_MS}ms).`);
   }
 
-  if (playing)
-    pause();
+  pause();
   hoverTimelineTime = null;
   timelineHoverSaved = null;
 
@@ -1936,6 +1981,7 @@ function renderPoseList() {
       clearTrackLock();
       selectedWatch = null;
       selectedIndex = i;
+      if (leftConnected && leftStreaming) liveAutoFollowHead = false;
       setStatus(`Jumped to pose #${i+1}.`);
       highlightPoseInList();
       updatePoseReadout();
@@ -1953,7 +1999,7 @@ function highlightPoseInList() {
   els.forEach(el => el.classList.toggle('selected', Number(el.dataset.idx) === selectedIndex));
   const el = poseList.querySelector(`.poseItem[data-idx="${CSS.escape(String(selectedIndex))}"]`);
   if (el) scrollIntoViewIfNeeded(poseList, el, 12);
-  }
+}
 
 // -------- drawing --------
 let drawQueued = false;
@@ -2074,7 +2120,7 @@ function drawRobot(pose, alpha=1.0) {
   const center = worldToScreen(pose.x, pose.y);
   const wPx = wIn * scale;
   const hPx = hIn * scale;
-  const thetaDeg = (pose.theta ?? 0);
+  const thetaDeg = (pose.theta ?? 0) + getThetaDelta();
   const thetaRad = (thetaDeg) * Math.PI / 180;
 
   ctx.save();
@@ -2135,7 +2181,7 @@ function drawRobot(pose, alpha=1.0) {
 }
 
 async function loadRobotImageFromPath(path) {
-  if (!path || !invoke) return;
+  if (!path || !hasInvoke()) return;
   try {
     const dataUrl = await invoke('read_image_data', { path });
     robotImageDataUrl = dataUrl;
@@ -2183,7 +2229,7 @@ function currentDisplayPose() {
   // playing > timeline hover > track hover > track lock > selectedIndex
   if (playing) return playPose || interpolatePoseAtTime(playTimeMs);
   if (!playing && hoverTimelineTime != null) return interpolatePoseAtTime(hoverTimelineTime);
-  if (!playing && !trackLockActive && trackHover?.pose) return trackHover.pose;
+  if (!playing && trackHover?.pose) return trackHover.pose;
   if (!playing && trackLockActive && trackLockPose) return trackLockPose;
   const poses = getPosesInches();
   return poses[selectedIndex] || null;
@@ -2200,8 +2246,11 @@ function draw() {
     if (p) drawRobot(p, 1.0);
   } else {
     drawPlanningOverlay();
-    const pose = planSampleAtDist(planPlayDist);
-    if (pose) drawRobot(pose, 1.0);
+    let pose = planSampleAtDist(planPlayDist);
+    if (pose) {
+      pose.theta -= getThetaDelta();
+      drawRobot(pose, 1.0);
+    }
   }
 }
 
@@ -2564,7 +2613,7 @@ function updateFloatingInfo(pose, idx) {
     // Clicking the readout jumps exactly to that waypoint
     clickable.style.cursor = "pointer";
     clickable.onclick = () => {
-      if (playing) pause();
+      pause();
       playTimeMs = watch.t;
       selectedIndex = findFloorIndexByTime(watch.t);
       updatePoseReadout();
@@ -2592,6 +2641,11 @@ function toggleFloatingInfo() {
   floatWin.classList.toggle('hidden');
   btnToggleFloat.classList.toggle('isOn', !floatWin.classList.contains('hidden'));
   floatWin.classList.toggle('isOn', !floatWin.classList.contains('hidden'));
+  
+  captureTelemetry("toggle_floating_info", { 
+    version: APP_VERSION,
+    enabled: !floatWin.classList.contains('hidden'),
+  }, { debounceMs: 1000 }).catch(err => console.error(err));
 }
 
 // -------- pose readout --------
@@ -2617,7 +2671,7 @@ function updatePoseReadout() {
     idx = findFloorIndexByTime(hoverTimelineTime);
     p = interpolatePoseAtTime(hoverTimelineTime);
 
-  } else if (!playing && !trackLockActive && trackHover?.pose) {
+  } else if (!playing && trackHover?.pose) {
   // if hover pose has a time, use interpolation (smooth) instead of the raw cached pose (snappy)
   const ht = trackHover.pose.t ?? null;
 
@@ -2682,8 +2736,6 @@ function resetView() {
 }
 
 function updateFieldLayout(preserveBounds=false) {
-  const wrap = document.getElementById('canvasWrap');
-  const rect = wrap.getBoundingClientRect();
   canvas.style.position = '';
   canvas.style.left = '';
   canvas.style.top = '';
@@ -2886,8 +2938,8 @@ canvas.addEventListener('pointermove', (e) => {
     canvas.style.cursor = 'grabbing';
 
     // If a hover-preview was active, clear it so the view feels stable while panning.
-    if (!trackLockActive && trackHover) {
-      clearTrackHover(true);
+    if (trackHover) {
+      clearTrackHover(!trackLockActive);
       highlightPoseInList();
       updatePoseReadout();
     }
@@ -3040,6 +3092,7 @@ function hitTestWatchAtClient(clientX, clientY) {
 let playPose = null;
 
 function pause() {
+  if (!playing) return;
   playing = false;
   btnPlay.textContent = "▶";
   if (raf) cancelAnimationFrame(raf);
@@ -3223,11 +3276,7 @@ timelineCanvas.addEventListener("mousedown", (e) => {
   // lock selection at time (clears track lock)
   clearTrackHover(true);
   clearTrackLock();
-  if (selectedWatch == null) {
-    setStatus(`Unlocked track lock.`);
-  }
   selectedWatch = null;
-
 
   const t = xToTime(x);
   selectedIndex = findFloorIndexByTime(t);
@@ -3287,9 +3336,6 @@ canvas.addEventListener('mousemove', (e) => {
     canvas.style.cursor = "";
   }
 
-  // if locked, ignore hover preview
-  if (trackLockActive) return;
-
   const hit = pickTrackPose(e.clientX, e.clientY);
 
   if (!hit) {
@@ -3297,7 +3343,7 @@ canvas.addEventListener('mousemove', (e) => {
     hoverTimelineTime = null;
 
     if (trackHover) {
-      clearTrackHover(true);
+      clearTrackHover(!trackLockActive);
       highlightPoseInList();
       updatePoseReadout();
       requestDrawAll();
@@ -3323,8 +3369,8 @@ canvas.addEventListener('mouseleave', () => {
   hoverTimelineTime = null;
   timelineHoverSaved = null;
   canvas.style.cursor = "";
-  if (!trackLockActive && trackHover) {
-    clearTrackHover(true);
+  if (trackHover) {
+    clearTrackHover(!trackLockActive);
     highlightPoseInList();
     updatePoseReadout();
     requestDrawAll();
@@ -3367,7 +3413,6 @@ canvas.addEventListener('click', (e) => {
       };
     }
 
-    setStatus(`Locked to track near pose #${selectedIndex+1}. (Click off-track to unlock)`);
     highlightPoseInList();
     updatePoseReadout();
     requestDrawAll();
@@ -3408,6 +3453,53 @@ let leftActionInFlight = false;
 let leftActionLastAt = 0;
 const LEFT_ACTION_COOLDOWN_MS = 400;
 let leftActionTimeout = null;
+
+let streamingSessionMs = 0; // Current session
+let streamingAccumulatedMs = 0; // Lifetime
+let streamingStartMs = null;
+
+function startStreamingTimer() {
+  if (streamingStartMs == null) {
+    streamingStartMs = performance.now();
+  }
+}
+
+function stopStreamingTimer() {
+  if (streamingStartMs != null) {
+    streamingSessionMs += performance.now() - streamingStartMs;
+    streamingAccumulatedMs += performance.now() - streamingStartMs;
+    streamingStartMs = null;
+  }
+}
+
+function getStreamingDurationSeconds() {
+  let totalMs = streamingSessionMs;
+  if (streamingStartMs != null) {
+    totalMs += performance.now() - streamingStartMs;
+  }
+  return Math.round(totalMs / 1000);
+}
+
+function resetStreamingTimer() {
+  streamingSessionMs = 0;
+  streamingStartMs = null;
+}
+
+function consumeStreamingDurationSeconds() {
+  stopStreamingTimer();
+  const seconds = getStreamingDurationSeconds();
+  resetStreamingTimer();
+  return seconds;
+}
+
+async function reportStreamingDuration() {
+  const seconds = consumeStreamingDurationSeconds();
+  if (seconds <= 0) return;
+  await captureTelemetry("streaming_duration", {
+    version: APP_VERSION,
+    streaming_seconds: seconds,
+  }, { debounceMs: 1500 });
+}
 
 function setLeftActionInFlight(v) {
   leftActionInFlight = v;
@@ -3680,11 +3772,8 @@ function leftSetUI(reason) {
 
   // Refresh controls only meaningful while connected
   if (btnLeftRefreshEl) btnLeftRefreshEl.disabled = !leftConnected || !leftActionInFlight;
-  if (leftRefreshIntervalEl) leftRefreshIntervalEl.disabled = !leftConnected;
 
-  if (reason) {
-    liveAppendLine(`[UI] ${reason}`);
-  }
+  if (reason) liveAppendLine(`[UI] ${reason}`);
 }
 
 function canRunLeftAction() {
@@ -3701,11 +3790,15 @@ async function apiPost(path, timeoutMs = 5000) {
 
   // ensure leading slash
   const p = path.startsWith("/") ? path : `/${path}`;
-  const origin = refreshBridgeOrigin();
-  if (!origin) {
+  if (!(await ensureBridgeOriginReady())) {
     dbgLive(`apiPost: ${p} blocked (origin not ready)`);
     return { ok: false, status: 0, json: { status: "bridge origin not ready" } };
   }
+  if (!(await waitForBackendReady(4000, 200))) {
+    dbgLive(`apiPost: ${p} blocked (backend not ready)`);
+    return { ok: false, status: 0, json: { status: "backend not ready" } };
+  }
+  const origin = ORIGIN;
   const url = `${origin}${p}`;
   const reqId = ++liveReqId;
   dbgLive(`apiPost#${reqId}: POST ${url}`);
@@ -3732,20 +3825,21 @@ async function connectLeft() {
   if (prosDirInput && prosDirInput.value) {
     await updateProsDir(prosDirInput.value);
   }
-  if (!prosDirValid || !prosExeValid) refreshWS(); // Only force refresh if not working
 
   if (!prosDirValid) {
     liveAppendLine('Something went wrong. Try restarting the application or waiting.');
     setStatus('Cannot connect: set a valid PROS directory in Settings first.');
     return;
   }
-  refreshBridgeOrigin();
-  if (ORIGIN == null || WS_ORIGIN == null) {
+  if (!(await ensureBridgeOriginReady()) || ORIGIN == null || WS_ORIGIN == null) {
     setLeftUi("Child process Bridge.py was not given a port. Live streaming cannot start.");
     return;
   }
-  if (playing)
-    pause();
+  if (!(await waitForBackendReady(6000, 200))) {
+    setLeftUi("Backend is still starting. Please try again in a moment.");
+    return;
+  }
+  pause();
   stopStreaming(false, false);
 
   if (leftWs) return;
@@ -3754,8 +3848,6 @@ async function connectLeft() {
   leftWs.addEventListener("open", () => {
     leftConnected = true;
     leftSetUI("Connected");
-    dbgLive("ws: open");
-
     startLeftRefresh();
   });
 
@@ -3778,9 +3870,12 @@ async function connectLeft() {
   });
 
   leftWs.addEventListener("close", () => {
+    const wasStreaming = leftStreaming;
     leftWs = null;
     leftConnected = false;
     leftStreaming = false;
+    if (wasStreaming) reportStreamingDuration();
+    else resetStreamingTimer();
     if (window.__live) { window.__live.connected = false; window.__live.streaming = false; }
     stopLeftRefresh();
     dbgLive("ws: close");
@@ -3796,12 +3891,15 @@ async function connectLeft() {
 
 function disconnectLeft() {
   dbgLive("disconnectLeft: begin");
+  const wasStreaming = leftStreaming;
   if (leftWs) {
     try { leftWs.close(); } catch (e) {}
   }
   leftWs = null;
   leftConnected = false;
   leftStreaming = false;
+  if (wasStreaming) reportStreamingDuration();
+  else resetStreamingTimer();
   stopLeftRefresh();
   leftSetUI("Disconnected");
 }
@@ -3905,6 +4003,7 @@ async function doLeftRefresh() {
 
 async function startStreaming() {
   dbgLive("startStreaming: begin");
+  resetStreamingTimer();
   let r;
   try {
     r = await withTimeout(apiPost("/api/start"), 5000, "start");
@@ -3920,6 +4019,7 @@ async function startStreaming() {
     }
     if (!r || !r.ok) return false;
     leftStreaming = true;
+    startStreamingTimer();
     leftSetUI("Streaming started");
     dbgLive("startStreaming: ok (retry)");
     return true;
@@ -3933,6 +4033,7 @@ async function startStreaming() {
   // New session: allow timestamps to restart from 0 without being dropped.
   liveLastPoseT = null;
   leftStreaming = true;
+  startStreamingTimer();
   leftSetUI("Streaming started");
   dbgLive(`startStreaming: ok (status=${r.status || "n/a"})`);
   return true;
@@ -3966,8 +4067,8 @@ async function stopStreaming(forceKill = false, doMsg = true) {
   }
   leftStreaming = false;
   clearLivePending();
-  if (doMsg)
-    leftSetUI(forceKill ? "Force-killed" : "Streaming stopped");
+  reportStreamingDuration();
+  if (doMsg) leftSetUI(forceKill ? "Force-killed" : "Streaming stopped");
   dbgLive("stopStreaming: ok");
   return true;
 }
@@ -3994,7 +4095,7 @@ btnLeftStopEl?.addEventListener('click', async (e) => {
   setLeftUi();
 
   try {
-    const forceKill = !!(e?.metaKey || e?.ctrlKey);
+    const forceKill = (e?.metaKey || e?.ctrlKey);
     if (forceKill) {
       await stopStreaming(true);
       return;
@@ -4020,6 +4121,12 @@ leftRefreshIntervalEl?.addEventListener('change', () => {
   saveSettings();
 });
 
+if (btnFit) {
+  btnFit.addEventListener('click', () => resetFieldPosition());
+} else {
+  console.warn('btnFit not found');
+}
+
 // Initialize UI on load
 leftSetUI("");
 
@@ -4031,7 +4138,7 @@ leftSetUI("");
   let startW = 0;
   // ensure grid state matches persisted widths on load
   try {
-    if (getLeftSidebarW() <= 1) { leftEl.classList.add('isCollapsed'); rowGrid && rowGrid.classList.add('leftCollapsed'); }
+    if (getLeftSidebarW() <= 1) leftEl.classList.add('isCollapsed'); rowGrid && rowGrid.classList.add('leftCollapsed');
   } catch (e) {}
 
 
@@ -4211,7 +4318,6 @@ leftSetUI("");
 
   // double-click splitters to toggle collapse/restore
   vSplitL.addEventListener('dblclick', () => {
-    if (!DBLCLICK_COLLAPSE_LEFTSIDEBAR) return;
     const cur = getLeftSidebarW();
     if (cur <= COLLAPSE_PX_LEFTSIDEBAR) {
       setLeftSidebarW(Math.max(1, layoutState.lastLeftSidebarW));
@@ -4225,7 +4331,6 @@ leftSetUI("");
     }
     resizeCanvas();
     resizeTimeline();
-    void saveSettings();
   });
 
   vSplit.addEventListener('dblclick', () => {
@@ -4238,15 +4343,13 @@ leftSetUI("");
       setRightSidebarW(0);
       rightEl.classList.add('isCollapsed');
     }
-      resetFieldPosition();
-      resizeCanvas();
-      layoutTimelineCanvas();
-      void saveSettings();
+    resetFieldPosition();
+    resizeCanvas();
+    layoutTimelineCanvas();
   });
 
   hSplit.addEventListener('dblclick', () => {
     const cur = getTimelineH();
-    let next = getTimelineH();
     if (cur <= COLLAPSE_PX_TIMELINE) {
       setTimelineH(Math.max(160, layoutState.lastTimelineH));
       timelineBar.classList.remove('isCollapsed');
@@ -4255,22 +4358,18 @@ leftSetUI("");
       setTimelineH(0);
       timelineBar.classList.add('isCollapsed');
     }
-      next = Math.min(1, next);
-      setTimelineH(next);
-      resetFieldPosition();
-      drawField();
-      resizeTimeline();
-      resizeCanvas();
-      layoutTimelineCanvas();
-      void saveSettings();
+    resizeTimeline();
+    resetFieldPosition();
+    resizeCanvas();
+    layoutTimelineCanvas();
   });
 })();
 
 // -------- data load --------
 function setData(obj) {
   data = obj;
-  if (!obj || !Array.isArray(obj.poses)) {
-    setStatus("Invalid viewer JSON: missing poses[]");
+  if (!obj || !Array.isArray(obj.poses) || !obj.poses.length) {
+    setStatus("Invalid JSON: missing poses[]");
     return;
   }
 
@@ -4288,8 +4387,32 @@ function setData(obj) {
     .sort((a,b) => (a.t ?? 0) - (b.t ?? 0));
 
   // watches: accept alternate key just in case
-  watches = normalizeWatches(obj.watches || obj.watch || obj.events || []);
+  watches = normalizeWatches(obj.watches || obj.watch || []);
+  finalizeLoadedData();
+}
 
+function setDataFromStreamText(text) {
+  rawPoses = [];
+  watches = [];
+  liveLastPoseT = null;
+
+  const lines = String(text ?? "").split(/\r?\n/);
+  for (const line of lines) {
+    parseLiveLineIntoState(line);
+  }
+
+  watches.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  data = { poses: rawPoses, watches, meta: {} };
+
+  if (!rawPoses.length) {
+    setStatus("No [DATA] entries found in log/text file.");
+    return;
+  }
+
+  finalizeLoadedData();
+}
+
+function finalizeLoadedData() {
   const currentUnits = settingsUnitsSelect?.value || unitsSelect?.value || 'in';
   setUnitsFactorFromSelect(currentUnits);
   updateOffsetsFromInputs();
@@ -4330,12 +4453,27 @@ function setData(obj) {
 
 async function handleFile(file) {
   try {
+    const fileName = file?.name?.toLowerCase?.() ?? "";
     const text = await file.text();
-    const obj = JSON.parse(text);
-    setData(obj);
+    setStatus(`Loaded ${file.name}`);
+    if (fileName.endsWith(".json")) {
+      const obj = JSON.parse(text);
+      setData(obj);
+      return "json";
+    }
+    if (fileName.endsWith(".txt") || fileName.endsWith(".log")) {
+      setDataFromStreamText(text);
+      return "text";
+    }
+    setStatus("Unsupported file type");
   } catch (e) {
     console.error(e);
     setStatus(`Failed to load: ${e?.message || e}`);
+    await captureTelemetry("failed_file_load", {
+      version: APP_VERSION,
+      reason: e?.message || e,
+    });
+    throw e;
   }
 }
 
@@ -4351,8 +4489,18 @@ async function openFile(file, inputEl) {
     setStatus('Invalid file type.');
     return;
   }
-  await handleFile(file);
-  if (inputEl) inputEl.value = ''; // allow reselecting same file
+  try {
+    const loadedType = await handleFile(file);
+    if (inputEl) inputEl.value = ''; // allow re selecting same file
+    await captureTelemetry("file_loaded", {
+      version: APP_VERSION,
+      file_name: fileName,
+      file_type: loadedType,
+      file_size: file.size,
+    });
+  } catch (e) {
+    if (inputEl) inputEl.value = '';
+  }
 }
 
 // -------- controls wiring --------
@@ -4393,18 +4541,16 @@ if (btnHelp) {
     e.stopPropagation();
     openHelp();
   });
-} else {
-  console.warn('btnHelp not found');
-}
+} else console.warn('btnHelp not found');
+
 if (btnHelpClose) {
   btnHelpClose.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     closeHelp();
   });
-} else {
-  console.warn('btnHelpClose not found');
-}
+} else console.warn('btnHelpClose not found');
+
 if (btnHelpKeybinds) {
   btnHelpKeybinds.addEventListener('click', (e) => {
     e.preventDefault();
@@ -4421,18 +4567,13 @@ if (btnKeybindsClose) {
 }
 if (helpModal) {
   helpModal.addEventListener('click', (e) => {
-    if (e.target && (e.target.classList.contains('modalBackdrop'))) {
-      closeHelp();
-    }
+    if (e.target && (e.target.classList.contains('modalBackdrop'))) closeHelp();
   });
-} else {
-  console.warn('helpModal not found');
-}
+} else console.warn('helpModal not found');
+
 if (keybindsModal) {
   keybindsModal.addEventListener('click', (e) => {
-    if (e.target && (e.target.classList.contains('modalBackdrop'))) {
-      closeKeybinds();
-    }
+    if (e.target && (e.target.classList.contains('modalBackdrop'))) closeKeybinds();
   });
 }
 
@@ -4442,15 +4583,12 @@ async function loadSettings() {
     let settings = null;
     if (invoke) {
       const saved = await invoke('read_settings');
-      if (saved) {
-        settings = JSON.parse(saved);
-      } else {
+      if (saved) settings = JSON.parse(saved);
+      else {
         // Create defaults on first run so the app data dir/file exists.
         await saveSettings();
       }
-    } else {
-      console.warn('Settings persistence is unavailable (Tauri invoke missing).');
-    }
+    } else console.warn('Settings persistence is unavailable (Tauri invoke missing).');
 
     if (settings) {
       if (settings.prosDir && prosDirInput) {
@@ -4777,9 +4915,7 @@ function openSettings() {
   // Focus the modal card for accessibility
   requestAnimationFrame(() => {
     const modalCard = settingsModal.querySelector('.modalCard');
-    if (modalCard) {
-      modalCard.focus();
-    }
+    if (modalCard) modalCard.focus();
   });
 }
 
@@ -4817,20 +4953,13 @@ if (btnSettingsClose) {
 
 if (settingsModal) {
   settingsModal.addEventListener('click', (e) => {
-    if (e.target && (e.target.classList.contains('modalBackdrop'))) {
-      closeSettings();
-    }
+    if (e.target && (e.target.classList.contains('modalBackdrop'))) closeSettings();
   });
-} else {
-  console.warn('settingsModal element not found');
-}
+} else console.warn('settingsModal element not found');
 
-if (modeViewingBtn) {
-  modeViewingBtn.addEventListener('click', () => setMode('viewing'));
-}
-if (modePlanningBtn) {
-  modePlanningBtn.addEventListener('click', () => setMode('planning'));
-}
+if (modeViewingBtn) modeViewingBtn.addEventListener('click', () => setMode('viewing'));
+
+if (modePlanningBtn) modePlanningBtn.addEventListener('click', () => setMode('planning'));
 
 // Global Escape handler: close modals and prevent window-level behavior
 window.addEventListener('keydown', (e) => {
@@ -4940,25 +5069,17 @@ if (settingsRobotImgRot) {
 function setProsDirStatus(message, kind = 'info') {
   if (!prosDirStatusEl) return;
   prosDirStatusEl.textContent = message;
-  if (kind === 'error') {
-    prosDirStatusEl.style.color = '#ff9b9b';
-  } else if (kind === 'ok') {
-    prosDirStatusEl.style.color = '#9fddb0';
-  } else {
-    prosDirStatusEl.style.color = 'var(--muted)';
-  }
+  if (kind === 'error') prosDirStatusEl.style.color = '#ff9b9b';
+  else if (kind === 'ok') prosDirStatusEl.style.color = '#9fddb0';
+  else prosDirStatusEl.style.color = 'var(--muted)';
 }
 
 function setProsExeStatus(message, kind = 'info') {
   if (!prosExeStatusEl) return;
   prosExeStatusEl.textContent = message;
-  if (kind === 'error') {
-    prosExeStatusEl.style.color = '#ff9b9b';
-  } else if (kind === 'ok') {
-    prosExeStatusEl.style.color = '#9fddb0';
-  } else {
-    prosExeStatusEl.style.color = 'var(--muted)';
-  }
+  if (kind === 'error') prosExeStatusEl.style.color = '#ff9b9b';
+  else if (kind === 'ok') prosExeStatusEl.style.color = '#9fddb0';
+  else prosExeStatusEl.style.color = 'var(--muted)';
 }
 
 function setAutoStatus(message, kind = 'info') {
@@ -4976,13 +5097,9 @@ function setAutoStatus(message, kind = 'info') {
 function setProsExeAutoStatus(message, kind = 'info') {
   if (!prosExeAutoStatusEl) return;
   prosExeAutoStatusEl.textContent = message;
-  if (kind === 'error') {
-    prosExeAutoStatusEl.style.color = '#ff9b9b';
-  } else if (kind === 'ok') {
-    prosExeAutoStatusEl.style.color = '#9fddb0';
-  } else {
-    prosExeAutoStatusEl.style.color = 'var(--muted)';
-  }
+  if (kind === 'error') prosExeAutoStatusEl.style.color = '#ff9b9b';
+  else if (kind === 'ok') prosExeAutoStatusEl.style.color = '#9fddb0';
+  else prosExeAutoStatusEl.style.color = 'var(--muted)';
 }
 
 function renderAutoResults(candidates) {
@@ -5032,9 +5149,7 @@ function renderAutoResults(candidates) {
 }
 
 function renderProsExeAutoResults(candidates) {
-  if (!prosExeAutoResultsEl) {
-    return;
-  }
+  if (!prosExeAutoResultsEl) return;
   prosExeAutoResultsEl.innerHTML = '';
   prosExeAutoResultsEl.hidden = false;
   if (!candidates || !candidates.length) {
@@ -5077,18 +5192,16 @@ function renderProsExeAutoResults(candidates) {
 }
 
 function refreshWS() {
+  if (!ensureBackendReady) return;
   refreshBridgeOrigin();
   updateConnectButtonState();
-  if (prosDirInput && prosDirInput.value && prosDirInput.value.trim()) {
-    updateProsDir(prosDirInput.value);
-  } else {
-    setProsDirStatus('PROS directory not set. Live viewing disabled.', 'error');
-  }
-  if (prosExeInput && prosExeInput.value && prosExeInput.value.trim()) {
-    updateProsExe(prosExeInput.value);
-  } else {
-    setProsExeStatus('PROS CLI path not set. Auto-detect or enter a path.', 'info');
-  }
+
+  if (prosDirInput && prosDirInput.value && prosDirInput.value.trim()) updateProsDir(prosDirInput.value);
+  else setProsDirStatus('PROS directory not set. Live viewing disabled.', 'error');
+
+  if (prosExeInput && prosExeInput.value && prosExeInput.value.trim()) updateProsExe(prosExeInput.value);
+  else setProsExeStatus('PROS CLI path not set. Auto-detect or enter a path.', 'info');
+  
   // Best-effort refresh from backend
   loadProsDirFromAPI();
   loadProsExeFromAPI();
@@ -5104,9 +5217,7 @@ async function updateProsDir(dir) {
     return;
   }
 
-  if (dir === "None" /*None is default state */) {
-    return;
-  }
+  if (dir === "None" /*None is default state */) { return; }
   try {
     const origin = refreshBridgeOrigin();
     if (!origin || !(await ensureBackendReady())) {
@@ -5396,11 +5507,6 @@ if (robotImageToggle) {
 }
 
 document.addEventListener('dragover', (e) => { e.preventDefault(); });
-document.addEventListener('drop', (e) => {
-  e.preventDefault();
-  const file = e.dataTransfer?.files?.[0];
-  if (file) handleFile(file);
-});
 
 btnPlay.addEventListener('click', () => {
   if (appMode === "planning") {
@@ -5419,6 +5525,10 @@ if (btnTogglePlanOverlay) {
     planOverlayVisible = !planOverlayVisible;
     btnTogglePlanOverlay.classList.toggle('isOn', planOverlayVisible);
     requestDrawAll();
+    captureTelemetry("toggle_plan_overlay", {
+      version: APP_VERSION,
+      enabled: planOverlayVisible,
+    }, { debounceMs: 1000 }).catch(err => console.error(err));
   });
   btnTogglePlanOverlay.classList.toggle('isOn', planOverlayVisible);
 }
@@ -5428,7 +5538,8 @@ speedSelect.addEventListener('change', () => {
   saveSettings();
 });
 
-btnFit.addEventListener('click', () => resetFieldPosition());
+
+
 if (fieldSelect) {
   fieldSelect.addEventListener('change', (e) => {
     loadFieldImage(e.target.value);
@@ -5573,7 +5684,7 @@ function clampDigits(el, maxDigits) {
   const parts = s.split(".");
   const intPart = parts[0].replace(/[^0-9-]/g, "");
   const fracPart = parts[1] ? parts[1].replace(/[^0-9]/g, "") : "";
-  const trimmedInt = intPart.replace(/(?!^)-/g, "").slice(0, maxDigits + (intPart.startsWith("-") ? 1 : 0));
+  const trimmedInt = intPart.replace(/(?!^)-/g, "").slice(0, maxDigits + (intPart.startsWith("—") ? 1 : 0));
   el.value = fracPart.length ? `${trimmedInt}.${fracPart}` : trimmedInt;
 }
 
@@ -5630,7 +5741,7 @@ offThetaEl.addEventListener('input', () => {
 
 if (watchSort) watchSort.addEventListener('change', () => { renderWatchList(); requestDrawAll(); });
 
-const btnLeftClear = document.getElementById('btnClearField');
+const btnClearField = document.getElementById('btnClearField');
 
 function clearAllPosesAndWatches() {
   // Stop playback/hover/locks so UI doesn’t reference stale indices
@@ -5660,23 +5771,6 @@ function clearAllPosesAndWatches() {
   try { requestDrawAll?.(); } catch {}2
 }
 
-btnLeftClear?.addEventListener('click', () => {
-  if (appMode === "viewing") {
-    clearAllPosesAndWatches();
-    resetLiveWin();
-    setStatus("Cleared Field and Watches")
-  } else {
-    planPause();
-    pushPlanUndo();
-    planWaypoints = [];
-    planPlayDist = 0;
-    planSetSelection([]);
-    planChanged();
-    requestDrawAll();
-    setStatus("Cleared Planned Path");
-  }
-});
-
 btnClearField?.addEventListener('click', () => {
   if (appMode === "planning") {
     pushPlanUndo();
@@ -5686,9 +5780,11 @@ btnClearField?.addEventListener('click', () => {
     planPause();
     planChanged();
     requestDrawAll();
+    setStatus("Cleared Planned Path");
   } else {
     clearAllPosesAndWatches();
     resetLiveWin();
+    setStatus("Cleared Field");
   }
 });
 
@@ -5703,13 +5799,58 @@ document.addEventListener('keydown', (e) => {
       setMode('viewing');
       return;
     }
+
     if (e.key === '2') {
       e.preventDefault();
       setMode('planning');
       return;
     }
+
+    if (e.key === 'o' || e.key === 'O') {
+      if (appMode !== "viewing") return;
+      e.preventDefault();
+      fileEl.click();
+      return;
+    }
+
+    if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      if (appMode === "viewing") {
+        if (leftConnected) disconnectLeft();
+        else void connectLeft();
+      }
+      return;
+    }
+    if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      if (leftConnected) {
+        if (!leftStreaming) void startStreaming();
+        else void stopStreaming(false);
+      }
+      return;
+    }
+
+    if (e.key === 'k' || e.key === 'K') {
+      e.preventDefault();
+      if (appMode === "planning") {
+        pushPlanUndo();
+        planWaypoints = [];
+        planSetSelection([]);
+        planPlayDist = 0;
+        planPause();
+        planChanged();
+        requestDrawAll();
+        setStatus("Cleared Planned Path");
+      } else {
+        clearAllPosesAndWatches();
+        resetLiveWin();
+        setStatus("Cleared Field");
+      }
+      return;
+    }
   }
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
     e.preventDefault();
     // Clear everything across modes
     clearAllPosesAndWatches();
@@ -5724,76 +5865,27 @@ document.addEventListener('keydown', (e) => {
     setStatus("Cleared Field and Planned Path");
     return;
   }
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'o' || e.key === 'O')) {
-    if (appMode !== "viewing") return;
-    e.preventDefault();
-    fileEl.click();
-    return;
-  }
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
-    e.preventDefault();
-    if (appMode === "planning") {
-      pushPlanUndo();
-      planWaypoints = [];
-      planSetSelection([]);
-      planPlayDist = 0;
-      planPause();
-      planChanged();
-      requestDrawAll();
-      setStatus("Cleared Planned Path");
-    } else {
-      clearAllPosesAndWatches();
-      resetLiveWin();
-      setStatus("Cleared Field");
-    }
-    return;
-  }
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
-    e.preventDefault();
-    return;
-  }
+
   if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-    if (e.key === 's' || e.key === 'S') {
-      e.preventDefault();
-      if (appMode === "viewing") {
-        if (leftConnected) {
-          if (!leftStreaming) void startStreaming();
-          else void stopStreaming(false);
-        }
-      } else {
-        if (planPlaying) planPause();
-        else planPlay();
-      }
-      return;
-    }
     if (e.key === 'p' || e.key === 'P') {
       e.preventDefault();
-      if (appMode === "viewing" && btnTogglePlanOverlay) {
-        btnTogglePlanOverlay.click();
-      }
+      if (appMode === "viewing" && btnTogglePlanOverlay) btnTogglePlanOverlay.click();
       return;
     }
+
     if (e.key === 't' || e.key === 'T') {
       toggleFloatingInfo();
-    }
-    if (e.key === 'c' || e.key === 'C') {
-      e.preventDefault();
-      if (appMode === "viewing") {
-        if (leftConnected) disconnectLeft();
-        else void connectLeft();
-      }
       return;
     }
   }
+
   if (e.key === 'f' || e.key === 'F') {
     e.preventDefault();
     resetFieldPosition();
     return;
   }
+
   if (appMode === "planning") {
-    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
-    const isTyping = (tag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable));
-    if (isTyping) return;
     if ((e.metaKey || e.ctrlKey) && !e.altKey) {
       if (!e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
@@ -5861,16 +5953,12 @@ document.addEventListener('keydown', (e) => {
     }
   }
   if (!data) return;
-  // Don't steal keys while typing in inputs/textareas (except the read-only live window).
-  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
-  const isTyping = (tag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable));
-  if (isTyping && e.target !== liveWinEl) return;
 
   // Space toggles "auto-follow head" while connected in livestream mode.
   if (e.code === "Space" && leftConnected) {
     e.preventDefault();
     if (liveAutoFollowHead) {
-      // about to turn it OFF => freeze at current index
+      // about to turn it OFF = freeze at current index
       lastPoseIndex = selectedIndex;
       liveAutoFollowHead = false;
     } else {
@@ -5906,16 +5994,43 @@ document.addEventListener('keydown', (e) => {
     updatePoseReadout();
     requestDrawAll();
   }
-  if (e.key === "p") {
-
-  }
 });
 
 // -------- init --------
 loadFieldOptions();
-void loadSettings(); // Load saved settings
+void loadSettings();
+void initPosthogTelemetry();
 void loadSavedPaths();
 setMode("viewing");
+
+async function appExit() {
+  try { await saveSettings(); } 
+  catch (err) { console.error("Failed to save settings during exit:", err); }
+
+  await captureTelemetry("total_streaming_duration", {
+    version: APP_VERSION, 
+    duration: streamingAccumulatedMs,
+  });
+
+  await captureTelemetry("app_exit", {
+    version: APP_VERSION, 
+    uptime: Number(fmtNum(performance.now() / 1000, 2)),
+  });
+
+}
+
+const setupExitHandler = async () => {
+  const appWindow = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow();
+  if (!appWindow?.listen) return;
+
+  // Listen for the user clicking the 'X'
+  await appWindow.listen("tauri://close-requested", async () => {
+    setStatus("App closing");
+    await appExit();
+    appWindow.destroy();
+  });
+};
+
 // Ensure modals start hidden
 if (helpModal) {
   helpModal.setAttribute('hidden', '');
@@ -5942,15 +6057,23 @@ setTimeout(() => {
     console.error('Error loading PROS dir:', e);
   }
 }, 500);
+
+let bridgeReadyInitInFlight = false;
 const bridgeReadyPoll = setInterval(() => {
-  if (refreshBridgeOrigin()) {
+  if (bridgeReadyInitInFlight) return;
+  bridgeReadyInitInFlight = true;
+  void (async () => {
+    if (!(await ensureBridgeOriginReady())) return;
+    if (!(await waitForBackendReady(8000, 250))) return;
     clearInterval(bridgeReadyPoll);
     loadProsDirFromAPI();
     loadProsExeFromAPI();
     if (prosExeInput && prosExeInput.value && prosExeInput.value.trim()) {
       updateProsExe(prosExeInput.value);
     }
-  }
+  })().finally(() => {
+    bridgeReadyInitInFlight = false;
+  });
 }, 250);
 window.addEventListener('resize', () => {
   updateFieldLayout(true); // keep bounds, recompute square sizing
@@ -5967,3 +6090,4 @@ syncRobotImgTxFromInputs();
 loadRobotImage();
 drawFirstField();
 updatePlanControls();
+void setupExitHandler();
